@@ -67,6 +67,12 @@ def compose(g, issues):
         ("Guard now", t.get("guard_now", "")),
         ("Fix", t.get("fix", "")),
     ]
+    rs = db.one("SELECT decision FROM research WHERE repo=? AND ecosystem=? AND package=?", g["repo"], g["ecosystem"], g["package"])
+    if rs and db.jl(rs["decision"], {}).get("summary"):
+        d = db.jl(rs["decision"], {})
+        rows.insert(1, ("Research", d["summary"]))
+        if d.get("mitigation_now"):
+            rows = [(k, d["mitigation_now"] if k == "Guard now" else v) for k, v in rows]
     fx = db.one("SELECT * FROM fixes WHERE repo=? AND ecosystem=? AND package=?", g["repo"], g["ecosystem"], g["package"])
     if fx and fx["status"] == "pr_opened":
         rows.append(("Auto-fix", f"Pull request ready to review: {fx['pr_url']}"))
@@ -138,8 +144,17 @@ def deliver(mail_id):
         return False
 
 
-def escalate(f, reason):
-    """Mail the routed leads that a finding needs a developer (auto-fix not possible). Once per target."""
+STRATEGY = {"patch_upgrade": "Patch upgrade", "minor_upgrade": "Minor upgrade", "major_upgrade": "Major upgrade",
+            "override_transitive": "Override the pulled-in version", "config_mitigation": "Configuration change",
+            "replace_library": "Replace the library", "remove_unused": "Remove the unused library",
+            "no_fix_available": "No fix available yet"}
+
+
+def escalate(f, reason, res=None):
+    """Mail the routed leads that a finding needs a developer (auto-fix not possible), with the web research
+    behind that call. Once per target."""
+    d = (res or {}).get("decision") or {}
+    sources = (res or {}).get("sources") or []
     sev = "CRITICAL" if f["kev"] else f["severity"]
     to = recipients(f["repo"], sev)
     if not to:
@@ -151,31 +166,39 @@ def escalate(f, reason):
     link = f"{DASHBOARD_URL}/issues/{f['id']}"
     decl = next((e for e in f["evidence"] if e["kind"] in ("declared", "locked")), None)
     rows = [
-        ("Why a human", reason),
-        ("Problem", f["problem"] or ""),
+        ("Help needed", reason),
+        ("What research found", d.get("summary") or f["problem"] or ""),
         ("Impact for us", f["impact"] or ""),
-        ("Guard now", f["guard"] or ""),
-        ("Fix", f["fix"] or (f"Upgrade to {f['target']}" if f["target"] else "No fixed version yet; apply the guard")),
+        ("Reachable here", {"high": "Likely: our code uses the affected feature", "medium": "Possibly",
+                            "low": "Unlikely from current usage"}.get(d.get("exploitability"), "")),
+        ("Proposed fix", (STRATEGY.get(d.get("strategy"), "") + (f" to {d['target_version']}" if d.get("target_version") else ""))
+         if d else (f["fix"] or (f"Upgrade to {f['target']}" if f["target"] else "No fixed version yet"))),
+        ("Code changes", d.get("code_change_summary") or ("None expected" if d else "")),
+        ("Breaking changes", d.get("breaking_changes") or ""),
+        ("Mitigate today", d.get("mitigation_now") or f["guard"] or ""),
         ("Where", f"{f['repo']} › {decl['file']}:{decl['hit']}  {decl['lines'][decl['hit'] - decl['start']][1].strip()}"
          if decl else f"{f['repo']} › {f['manifest'] or ''}"),
     ]
+    rows = [(k, v) for k, v in rows if v]
     ids = list(dict.fromkeys(a for v in f["vulns"] for a in [v["id"], *v["aliases"]] if a.startswith(("CVE-", "GHSA-"))))
     more = ", ".join(ids[:6]) + (f" +{len(ids) - 6} more" if len(ids) > 6 else "")
-    text = "\n".join([f"{pcode} · {sev} · auto-fix not possible, please assign a developer", "",
+    text = "\n".join([f"{pcode} · {sev} · we need your help: this can't be fixed automatically", "",
                       *[f"{k.upper()}: {v}" for k, v in rows], "", f"Advisories: {more}",
+                      *(["Sources:"] + [f"  - {x['title']}: {x['url']}" for x in sources[:5]] if sources else []),
                       f"Step-by-step guide: {link}" + (f"\nCode: {decl['url']}" if decl else ""), "",
                       "— VulnWatch (automated)."])
     cell = "padding:6px 10px;vertical-align:top;border-bottom:1px solid #eee"
     trs = "".join(
         f'<tr><td style="{cell};color:#64748b;white-space:nowrap;font-size:12px;text-transform:uppercase">{k}</td>'
-        f'<td style="{cell}{";background:#fff7ed;font-weight:600" if k == "Why a human" else ""}'
+        f'<td style="{cell}{";background:#fff7ed;font-weight:600" if k == "Help needed" else ""}'
         f'{";background:#fef2f2;font-weight:600" if k == "Impact for us" else ""}">{html.escape(v)}</td></tr>'
         for k, v in rows)
     body_html = f"""<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;font-size:14px;color:#0f172a;max-width:640px">
 <p><span style="background:#dc2626;color:#fff;padding:2px 8px;border-radius:4px;font-weight:700">ESCALATION · {pcode}</span>
-<span style="color:#64748b;margin-left:6px">{html.escape(sev)} · auto-fix not possible, please assign a developer</span></p>
+<span style="color:#64748b;margin-left:6px">{html.escape(sev)} · we need your help: this can't be fixed automatically</span></p>
 <table style="border-collapse:collapse;width:100%">{trs}</table>
 <p style="font-size:12px;color:#64748b">Advisories: {html.escape(more)}</p>
+{"<p style='font-size:12px;color:#64748b;margin:0'>Sources:</p><ul style='font-size:12px;margin-top:2px'>" + "".join(f"<li><a href='{html.escape(x['url'])}' style='color:#2563eb'>{html.escape(x['title'] or x['url'])}</a></li>" for x in sources[:5]) + "</ul>" if sources else ""}
 <p><a href="{html.escape(link)}" style="background:#0f172a;color:#fff;padding:8px 14px;border-radius:6px;text-decoration:none;display:inline-block">Open fix guide →</a>
 {f'&nbsp;<a href="{html.escape(decl["url"])}" style="color:#2563eb">View code on GitHub</a>' if decl else ''}</p>
 <p style="font-size:12px;color:#94a3b8">VulnWatch (automated).</p></div>"""
@@ -206,6 +229,9 @@ def run(log=print):
         for r in to:
             if db.one("SELECT 1 FROM mails WHERE group_key=? AND recipient=?", key, r):
                 continue  # already mailed (or previewed) for this finding
+            if db.one("SELECT 1 FROM mails WHERE group_key LIKE ? AND recipient=?",
+                      f"escalate|{g['repo']}|{g['ecosystem']}|{g['package']}|%", r):
+                continue  # the escalation mail already covers it
             mid = db.x("""INSERT INTO mails(group_key, issue_id, recipient, subject, body, html, status, created_at)
                           VALUES(?,?,?,?,?,?,'preview',?)""", key, issues[0]["id"], r, subject, text, body_html, db.now())
             made += 1

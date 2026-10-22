@@ -51,8 +51,11 @@ def build():
             "vuln_count": len(live),
         })
     fixes = {(x["repo"], x["ecosystem"], x["package"]): x for x in db.q("SELECT * FROM fixes ORDER BY id")}
+    res = {(x["repo"], x["ecosystem"], x["package"]): x for x in db.q("SELECT repo, ecosystem, package, decision, sources, created_at FROM research")}
     for f in out:
         x = fixes.get((f["repo"], f["ecosystem"], f["package"]))
+        rr = res.get((f["repo"], f["ecosystem"], f["package"]))
+        f["research"] = {"decision": db.jl(rr["decision"], {}), "sources": db.jl(rr["sources"]), "at": rr["created_at"]} if rr else None
         f["autofix"] = {k: x[k] for k in ("id", "kind", "status", "reason", "target", "branch", "files", "diff", "pr_url", "updated_at")} if x else None
     out.sort(key=lambda f: (f["priority"], -f["kev"], -config.SEV_RANK.get(f["severity"], 0), -f["vuln_count"]))
     return out

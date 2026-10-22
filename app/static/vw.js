@@ -99,6 +99,18 @@ document.addEventListener("alpine:init", () => {
       3: { bar: "bg-slate-400", text: "text-slate-700 dark:text-slate-300", dot: "bg-slate-400", ring: "ring-slate-500" },
     },
     VERDICT: { yes: ["Affected", "pill-red"], maybe: ["Possibly affected", "pill-amber"], no: ["Not reachable", "pill-green"] },
+    STRATEGY: { patch_upgrade: "Patch upgrade", minor_upgrade: "Minor upgrade", major_upgrade: "Major upgrade",
+                override_transitive: "Override pulled-in version", config_mitigation: "Config change", replace_library: "Replace library",
+                remove_unused: "Remove unused library", no_fix_available: "No fix yet" },
+    researchNotes: {},
+    async loadResearch(f) {
+      if (!this.researchNotes[f.id]) this.researchNotes[f.id] = (await (await fetch(`/api/findings/${f.id}/research`)).json()).html || "<p>No notes.</p>";
+    },
+    async reResearch(f) {
+      const r = await vw.post(`/api/findings/${f.id}/research`);
+      vw.toast(r.started ? `Researching ${f.package} on the web (about a minute)…` : "Another job is running; try again in a moment.", { kind: r.started ? "ok" : "info" });
+      if (r.started) delete this.researchNotes[f.id];
+    },
     sevClass(s) { return "sev-" + (s || "UNKNOWN"); },
     files(fx) { try { return JSON.parse(fx.files || "[]"); } catch (e) { return []; } },
     async loadGuide(f) {

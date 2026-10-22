@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, page_header %}
+{% block title %}Check a repo{% endblock %}
+{% block content %}
+<div x-data="checker()" x-init="init()">
+  {% call page_header("Check a public repo", "Paste a GitHub link. Every dependency and GitHub Action is checked against known malware and vulnerabilities. Nothing is cloned or run.") %}{% endcall %}
+
+  <form @submit.prevent="start()" class="card flex flex-col gap-3 p-4 sm:flex-row sm:items-start">
+    <div class="flex-1">
+      <label for="url" class="sr-only">GitHub repo link</label>
+      <div class="relative">
+        <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 muted">{{ icon("github", "w-5 h-5") }}</span>
+        <input id="url" x-model="url" x-ref="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/owner/repo"
+               class="input min-h-[48px] pl-10 text-base" aria-describedby="url-help">
+      </div>
+      <p id="url-help" class="mt-1.5 text-[13px]" :class="error ? 'text-red-700 dark:text-red-300' : 'muted'"
+         x-text="error || 'Public repos only. owner/repo works too, and so does a /tree/branch link.'"></p>
+    </div>
+    <button class="btn-primary min-h-[48px] px-5" :disabled="busy || !url.trim()">
+      <template x-if="busy"><svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg></template>
+      <span x-text="busy ? 'Checking…' : 'Check repo'"></span></button>
+  </form>
+
+  <!-- progress -->
+  <div x-show="busy" x-cloak class="card mt-5 p-5" aria-live="polite">
+    <div class="flex items-center gap-3"><svg class="h-5 w-5 animate-spin text-blue-600 dark:text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
+      <p class="font-medium" x-text="progress || 'Starting…'"></p></div>
+    <div class="mt-4 space-y-2"><div class="skeleton h-16 w-full"></div><div class="skeleton h-10 w-2/3"></div></div>
+  </div>
+
+  <!-- result -->
+  <template x-if="r && !busy">
+    <div class="mt-5 space-y-5">
+      <section class="rounded-xl p-5 ring-1" :class="V[r.verdict.level].box" role="status">
+        <div class="flex flex-wrap items-start gap-4">
+          <span class="grid h-12 w-12 shrink-0 place-items-center rounded-full" :class="V[r.verdict.level].icon">
+            <template x-if="r.verdict.level === 'clean'">{{ icon("check", "w-6 h-6") }}</template>
+            <template x-if="r.verdict.level !== 'clean'">{{ icon("alert", "w-6 h-6") }}</template>
+          </span>
+          <div class="min-w-0 flex-1">
+            <p class="text-sm font-semibold uppercase tracking-wide" x-text="V[r.verdict.level].label"></p>
+            <h2 class="text-xl font-bold" x-text="r.verdict.title"></h2>
+            <p class="mt-1 max-w-prose" x-text="r.verdict.detail"></p>
+          </div>
+          <button @click="share()" class="btn-secondary">{{ icon("external") }} Copy link</button>
+        </div>
+      </section>
+
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1 muted">
+        <a :href="r.repo.url" target="_blank" rel="noopener" class="inline-flex min-h-[40px] items-center gap-1.5 font-semibold text-slate-900 hover:underline dark:text-white">{{ icon("github") }} <span x-text="r.repo.owner + '/' + r.repo.name"></span></a>
+        <span class="inline-flex items-center gap-1">{{ icon("branch") }} <span class="font-mono" x-text="r.repo.branch + '@' + r.repo.sha.slice(0, 7)"></span></span>
+        <span x-show="r.repo.language" x-text="r.repo.language"></span>
+        <span x-show="r.repo.stars != null" x-text="'★ ' + (r.repo.stars || 0).toLocaleString()"></span>
+        <span :title="vw.local(r.repo.pushed_at)" x-text="'pushed ' + vw.ago(r.repo.pushed_at)"></span>
+        <span x-show="r.repo.archived" class="pill-amber">archived</span>
+        <span class="ml-auto" x-text="'checked ' + vw.ago(checkedAt)"></span>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <template x-for="t in [['Packages checked', r.stats.packages, ''], ['Actions checked', r.stats.actions, ''], ['Vulnerable packages', r.stats.vulnerable, r.stats.vulnerable ? 'text-orange-700 dark:text-orange-300' : ''],
+                               ['Malicious', r.stats.malicious + bad.length, (r.stats.malicious + bad.length) ? 'text-red-700 dark:text-red-300' : 'text-emerald-700 dark:text-emerald-300'],
+                               ['Exploited in the wild', r.stats.kev, r.stats.kev ? 'text-red-700 dark:text-red-300' : ''], ['Critical', r.stats.critical, r.stats.critical ? 'text-red-700 dark:text-red-300' : '']]" :key="t[0]">
+          <div class="card p-4"><div class="muted" x-text="t[0]"></div><div class="mt-1 text-2xl font-bold tabular-nums" :class="t[2]" x-text="t[1]"></div></div>
+        </template>
+      </div>
+
+      <!-- malicious packages + hijacked actions -->
+      <template x-if="mal.length || bad.length">
+        <section>
+          <h2 class="section-title mb-2 text-red-700 dark:text-red-300">Known malware</h2>
+          <ul class="space-y-2">
+            <template x-for="f in mal" :key="f.ecosystem + f.package + f.version">
+              <li class="rounded-xl bg-red-50 p-4 ring-1 ring-red-600/30 dark:bg-red-500/10 dark:ring-red-500/40">
+                <div class="flex flex-wrap items-center gap-2"><span class="sev-CRITICAL">MALWARE</span>
+                  <span class="font-mono text-base font-semibold" x-text="f.package + ' ' + f.version"></span><span class="muted" x-text="f.ecosystem"></span></div>
+                <p class="mt-1" x-text="f.vulns.find(v => v.malicious).summary"></p>
+                <p class="mt-1 text-[13px]"><b>Do now:</b> remove this version, rotate any secrets on machines or CI that installed it, then reinstall from a clean lockfile.</p>
+                <div class="mt-2 flex flex-wrap gap-2"><template x-for="l in f.locations" :key="l.url">{% include "_check_loc.html" %}</template></div>
+              </li>
+            </template>
+            <template x-for="a in bad" :key="a.action + a.ref">
+              <li class="rounded-xl bg-red-50 p-4 ring-1 ring-red-600/30 dark:bg-red-500/10 dark:ring-red-500/40">
+                <div class="flex flex-wrap items-center gap-2"><span class="sev-CRITICAL">HIJACKED ACTION</span>
+                  <span class="font-mono text-base font-semibold" x-text="a.action + '@' + a.ref"></span></div>
+                <p class="mt-1" x-text="a.vulns.find(v => v.malicious).summary"></p>
+                <p class="mt-1 text-[13px]"><b>Do now:</b> rotate every secret this workflow could read, check its past run logs for leaked values, and pin the action to a reviewed commit SHA.</p>
+                <div class="mt-2 flex flex-wrap gap-2"><template x-for="l in a.locations" :key="l.url">{% include "_check_loc.html" %}</template></div>
+              </li>
+            </template>
+          </ul>
+        </section>
+      </template>
+
+      <!-- actions with advisories -->
+      <template x-if="actionIssues.length">
+        <section>
+          <h2 class="section-title mb-2">GitHub Actions with advisories</h2>
+          <ul class="card divide-y divide-slate-100 dark:divide-slate-800">
+            <template x-for="a in actionIssues" :key="a.action + a.ref">
+              <li class="px-4 py-3">
+                <div class="flex flex-wrap items-center gap-2"><span class="font-mono font-semibold" x-text="a.action + '@' + a.ref"></span>
+                  <span :class="a.affected ? 'pill-red' : 'pill-amber'" x-text="a.affected ? 'Affected version' : 'Pinned to a ' + a.pinned + ': check manually'"></span></div>
+                <ul class="mt-1 space-y-0.5"><template x-for="v in a.vulns" :key="v.id"><li class="text-[13px] muted"><a class="link font-mono" :href="'https://osv.dev/vulnerability/' + v.id" target="_blank" rel="noopener" x-text="v.id"></a> · <span x-text="v.summary"></span></li></template></ul>
+                <div class="mt-2 flex flex-wrap gap-2"><template x-for="l in a.locations" :key="l.url">{% include "_check_loc.html" %}</template></div>
+              </li>
+            </template>
+          </ul>
+        </section>
+      </template>
+
+      <!-- vulnerable packages -->
+      <section x-show="vuln.length">
+        <div class="mb-2 flex flex-wrap items-center gap-2">
+          <h2 class="section-title mr-auto">Vulnerable packages <span class="font-normal muted" x-text="'(' + shown.length + ')'"></span></h2>
+          <template x-for="s in ['CRITICAL', 'HIGH', 'MODERATE', 'LOW']" :key="s">
+            <button @click="sev = sev === s ? '' : s" :aria-pressed="sev === s" class="min-h-[40px] rounded-md px-1" :class="sev === s ? 'ring-2 ring-blue-500' : 'opacity-80 hover:opacity-100'">
+              <span :class="'sev-' + s" x-text="s + ' ' + vuln.filter(f => f.worst === s).length"></span></button>
+          </template>
+          <label class="flex min-h-[40px] items-center gap-2 px-2"><input type="checkbox" class="checkbox" x-model="hideDev"> Hide dev-only</label>
+        </div>
+        <ul class="space-y-2">
+          <template x-for="f in shown.slice(0, limit)" :key="f.ecosystem + f.package + f.version">
+            <li class="card overflow-hidden" x-data="{ o: false }">
+              <button @click="o = !o" :aria-expanded="o" class="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                    <span class="font-mono font-semibold" x-text="f.package"></span><span class="font-mono muted" x-text="f.version"></span>
+                    <span x-show="f.fix" class="font-mono text-emerald-700 dark:text-emerald-300" x-text="'→ ' + f.fix"></span>
+                    <span x-show="f.kev" class="self-center text-red-600 dark:text-red-400" title="Exploited in the wild (CISA KEV)">{{ icon("flame", "w-4 h-4", "Exploited in the wild") }}</span>
+                    <span x-show="f.dev" class="pill-slate self-center">dev only</span>
+                  </div>
+                  <div class="muted"><span x-text="f.ecosystem"></span> · <span x-text="C[f.vulns[0].category] || 'Other'"></span> · <span x-text="vw.plural(f.vulns.length, 'advisory', 'advisories')"></span>
+                    · <span x-text="f.locations[0].file"></span></div>
+                </div>
+                <span :class="'sev-' + f.worst" x-text="f.worst"></span>
+                <span class="muted transition-transform duration-[180ms]" :class="o && 'rotate-180'">{{ icon("chevron", "w-5 h-5") }}</span>
+              </button>
+              <div x-show="o" x-collapse.duration.200ms>
+                <div class="space-y-3 border-t border-slate-200 px-4 py-3 dark:border-slate-800">
+                  <div class="flex flex-wrap gap-2"><template x-for="l in f.locations" :key="l.url">{% include "_check_loc.html" %}</template></div>
+                  <ul class="space-y-2">
+                    <template x-for="v in f.vulns" :key="v.id">
+                      <li class="flex flex-wrap items-start gap-2"><span :class="'sev-' + v.severity" x-text="v.severity"></span>
+                        <a class="link font-mono text-[13px]" :href="'https://osv.dev/vulnerability/' + v.id" target="_blank" rel="noopener" x-text="v.id"></a>
+                        <span class="min-w-[12rem] flex-1" x-text="v.summary"></span>
+                        <span x-show="v.fixed.length" class="font-mono text-[13px] text-emerald-700 dark:text-emerald-300" x-text="'fixed ' + v.fixed.join(', ')"></span></li>
+                    </template>
+                  </ul>
+                </div>
+              </div>
+            </li>
+          </template>
+        </ul>
+        <div x-show="shown.length > limit" class="mt-3 text-center"><button @click="limit += 30" class="btn-secondary" x-text="'Show ' + Math.min(30, shown.length - limit) + ' more'"></button></div>
+      </section>
+
+      <details class="card p-4">
+        <summary class="flex min-h-[40px] cursor-pointer items-center font-semibold">What this checks, and what it doesn't</summary>
+        <div class="mt-2 max-w-prose space-y-2 muted">
+          <p><b class="text-slate-900 dark:text-white">Checks:</b> <span x-text="r.stats.dep_files"></span> dependency files and <span x-text="r.stats.workflow_files"></span> workflow files on <span class="font-mono" x-text="r.repo.branch"></span>.
+            Each exact package version is checked with OSV.dev for malware (OSV MAL- entries and CWE-506 advisories), exploited-in-the-wild bugs (CISA KEV) and other known vulnerabilities. GitHub Actions are checked against their advisories.</p>
+          <p><b class="text-slate-900 dark:text-white">Doesn't check:</b> the repo's own source code, secrets committed to it, packages without an exact version (no lockfile), or malware nobody has reported yet. "No known issues" is not a guarantee.</p>
+          <template x-if="r.unpinned.length"><p><b class="text-slate-900 dark:text-white">Hardening tip:</b> <span x-text="vw.plural(r.unpinned.length, 'action is', 'actions are')"></span> pinned to a tag or branch, which can be moved to malicious code (that is how tj-actions was hijacked). Pin them to full commit SHAs.</p></template>
+          <template x-for="n in r.notes" :key="n"><p x-text="n"></p></template>
+        </div>
+      </details>
+    </div>
+  </template>
+
+  <template x-if="failed && !busy">
+    <div class="mt-5 flex items-start gap-3 rounded-xl bg-red-50 p-4 text-red-900 ring-1 ring-red-600/20 dark:bg-red-500/10 dark:text-red-200" role="alert">
+      {{ icon("xcircle", "w-5 h-5") }}<div><p class="font-semibold">The check could not finish</p><p x-text="failed"></p></div>
+    </div>
+  </template>
+
+  <!-- recent checks -->
+  <section x-show="history.length" class="mt-8">
+    <h2 class="section-title mb-2">Recent checks</h2>
+    <ul class="card divide-y divide-slate-100 dark:divide-slate-800">
+      <template x-for="h in history" :key="h.id">
+        <li><a :href="'/check/' + h.id" class="flex min-h-[48px] flex-wrap items-center gap-3 px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/40">
+          <span class="font-mono font-medium" x-text="h.repo"></span>
+          <span :class="h.status === 'error' ? 'pill-red' : (h.verdict ? V[h.verdict].pill : 'pill-blue')" x-text="h.status === 'error' ? 'Failed' : (h.verdict ? V[h.verdict].short : 'Running')"></span>
+          <span class="ml-auto text-[13px] muted" :title="vw.local(h.created_at)" x-text="vw.ago(h.created_at)"></span></a></li>
+      </template>
+    </ul>
+  </section>
+</div>
+
+<script>
+function checker() {
+  return {
+    url: "", busy: false, progress: "", error: "", failed: "", r: null, checkedAt: null, history: [], sev: "", hideDev: false, limit: 30,
+    C: {{ cats|tojson }},
+    V: {
+      compromised: { label: "Compromised", short: "Compromised", pill: "pill-red", box: "bg-red-50 ring-red-600/30 text-red-950 dark:bg-red-500/10 dark:ring-red-500/40 dark:text-red-50", icon: "bg-red-600 text-white" },
+      at_risk: { label: "At risk", short: "At risk", pill: "pill-red", box: "bg-orange-50 ring-orange-600/30 text-orange-950 dark:bg-orange-500/10 dark:ring-orange-500/40 dark:text-orange-50", icon: "bg-orange-600 text-white" },
+      issues: { label: "Needs attention", short: "Some issues", pill: "pill-amber", box: "bg-amber-50 ring-amber-600/30 text-amber-950 dark:bg-amber-500/10 dark:ring-amber-500/40 dark:text-amber-50", icon: "bg-amber-500 text-slate-950" },
+      clean: { label: "Clean", short: "Clean", pill: "pill-green", box: "bg-emerald-50 ring-emerald-600/30 text-emerald-950 dark:bg-emerald-500/10 dark:ring-emerald-500/40 dark:text-emerald-50", icon: "bg-emerald-600 text-white" },
+    },
+    get mal() { return this.r ? this.r.findings.filter(f => f.malicious) : []; },
+    get bad() { return this.r ? this.r.actions.filter(a => a.compromised) : []; },
+    get actionIssues() { return this.r ? this.r.actions.filter(a => !a.compromised) : []; },
+    get vuln() { return this.r ? this.r.findings.filter(f => !f.malicious) : []; },
+    get shown() { return this.vuln.filter(f => (!this.sev || f.worst === this.sev) && (!this.hideDev || !f.dev)); },
+
+    async init() {
+      this.loadHistory();
+      const id = "{{ check_id }}";
+      if (id) this.watch(id); else this.$refs.url.focus();
+    },
+    async loadHistory() { try { this.history = (await (await fetch("/api/checks")).json()).checks; } catch (e) {} },
+    async start() {
+      this.error = ""; this.failed = "";
+      const res = await fetch("/api/check", { method: "POST", body: new URLSearchParams({ url: this.url }) });
+      const d = await res.json();
+      if (!res.ok) { this.error = d.error; this.$refs.url.focus(); return; }
+      history.pushState({}, "", "/check/" + d.id);
+      this.watch(d.id);
+    },
+    async watch(id) {
+      this.busy = true; this.r = null; this.failed = "";
+      for (;;) {
+        const res = await fetch("/api/check/" + id);
+        if (!res.ok) { this.busy = false; this.failed = "This check no longer exists."; return; }
+        const c = await res.json();
+        this.url = this.url || c.url; this.progress = c.progress;
+        if (c.status === "done") { this.r = c.result; this.checkedAt = c.finished_at; this.busy = false; this.sev = ""; this.limit = 30; this.loadHistory(); return; }
+        if (c.status === "error") { this.failed = c.error; this.busy = false; this.loadHistory(); return; }
+        await new Promise(r => setTimeout(r, 1200));
+      }
+    },
+    async share() {
+      try { await navigator.clipboard.writeText(location.href); vw.toast("Link copied", { kind: "ok" }); }
+      catch (e) { vw.toast(location.href); }
+    },
+  };
+}
+</script>
+{% endblock %}

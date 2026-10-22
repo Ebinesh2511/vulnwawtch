@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 
-from . import ai, autofix, classify, config, db, findings, gh, jobs, mailer
+from . import ai, autofix, checker, classify, config, db, findings, gh, jobs, mailer, research
 
 EMAIL_RE = re.compile(r"[^@\s,;]+@[^@\s,;]+\.[A-Za-z]{2,}")
 HERE = Path(__file__).parent
@@ -65,6 +65,21 @@ def api_findings():
 def api_guide(iid: int):
     i = db.one("SELECT guide FROM issues WHERE id=?", iid)
     return {"html": _md.render(i["guide"]) if i and i["guide"] else ""}
+
+
+@app.get("/api/findings/{iid}/research")
+def api_research(iid: int):
+    f = next((f for f in findings.build() if iid in f["ids"]), None)
+    r = research.get(f) if f else None
+    return {"html": _md.render(r["notes"]) if r else "", "queries": r["queries"] if r else []}
+
+
+@app.post("/api/findings/{iid}/research")
+def api_research_run(iid: int):
+    def work(log):
+        f = next(f for f in findings.build() if iid in f["ids"])
+        research.research(f, log=log, force=True)
+    return {"started": jobs.run(f"research #{iid}", work)}
 
 
 @app.post("/api/findings/{iid}/status")
@@ -258,6 +273,40 @@ def feed_page(request: Request):
                      "score": score, "kev": bool(f["kev"]),
                      "repos": sorted({r for i in ids for r in touch.get(i, ())})})
     return page(request, "feeds.html", rows=rows)
+
+
+# ---------- check any public repo ----------
+
+@app.get("/check", response_class=HTMLResponse)
+def check_page(request: Request):
+    return page(request, "check.html", check_id="", **labels())
+
+
+@app.get("/check/{cid}", response_class=HTMLResponse)
+def check_result_page(request: Request, cid: str):
+    return page(request, "check.html", check_id=cid if re.fullmatch(r"[0-9a-f]{10}", cid) else "", **labels())
+
+
+@app.post("/api/check")
+def api_check_start(url: str = Form(...)):
+    try:
+        return {"id": checker.start(url)}
+    except checker.CheckError as e:
+        return JSONResponse({"error": str(e)}, 400)
+
+
+@app.get("/api/check/{cid}")
+def api_check(cid: str):
+    c = db.one("SELECT * FROM checks WHERE id=?", cid)
+    if not c:
+        return JSONResponse({"error": "Check not found"}, 404)
+    c["result"] = json.loads(c["result"]) if c["result"] else None
+    return c
+
+
+@app.get("/api/checks")
+def api_checks():
+    return {"checks": db.q("SELECT id, url, repo, status, verdict, created_at FROM checks ORDER BY created_at DESC LIMIT 15")}
 
 
 # ---------- runs + jobs ----------

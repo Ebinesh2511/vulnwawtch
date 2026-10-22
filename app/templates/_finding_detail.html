@@ -17,6 +17,47 @@
     </div>
   </div>
 
+  <!-- web research -->
+  <section class="card p-4">
+    <div class="flex flex-wrap items-center gap-2">
+      {{ icon("search", "w-5 h-5 muted") }}<h4 class="font-semibold">Research</h4>
+      <template x-if="f.research">
+        <span class="flex flex-wrap items-center gap-2">
+          <span class="pill-blue" x-text="STRATEGY[f.research.decision.strategy] + (f.research.decision.target_version ? ' → ' + f.research.decision.target_version : '')"></span>
+          <span :class="{ trivial: 'pill-green', small: 'pill-amber', large: 'pill-red' }[f.research.decision.effort]" x-text="'effort: ' + f.research.decision.effort"></span>
+          <span :class="{ high: 'pill-red', medium: 'pill-amber', low: 'pill-green' }[f.research.decision.exploitability]" x-text="'reachable here: ' + f.research.decision.exploitability"></span>
+          <span x-show="f.research.decision.needs_human" class="pill-red">Needs a developer</span>
+        </span>
+      </template>
+      <button @click="reResearch(f)" class="btn-ghost ml-auto" x-text="f.research ? 'Research again' : 'Research now'"></button>
+    </div>
+    <p x-show="!f.research" class="mt-2 muted">Not researched yet. The next check reads the advisories, patches and changelogs on the web and picks the smallest safe fix.</p>
+    <template x-if="f.research">
+      <div class="mt-3 space-y-3">
+        <p class="max-w-prose" x-text="f.research.decision.summary"></p>
+        <p x-show="f.research.decision.needs_human" class="rounded-lg bg-red-50 p-3 text-red-900 ring-1 ring-red-600/20 dark:bg-red-500/10 dark:text-red-100 dark:ring-red-500/30"><b>Help needed: </b><span x-text="f.research.decision.human_reason"></span></p>
+        <dl class="grid gap-3 sm:grid-cols-2">
+          <template x-for="row in [['Code changes', f.research.decision.code_change_summary || 'None expected'], ['Breaking changes', f.research.decision.breaking_changes], ['Mitigate today', f.research.decision.mitigation_now]]" :key="row[0]">
+            <div x-show="row[1]"><dt class="text-xs font-semibold uppercase tracking-wide muted" x-text="row[0]"></dt><dd class="mt-0.5" x-text="row[1]"></dd></div>
+          </template>
+        </dl>
+        <div x-show="f.research.sources.length">
+          <p class="text-xs font-semibold uppercase tracking-wide muted">Sources</p>
+          <ul class="mt-1 flex flex-wrap gap-2">
+            <template x-for="s in f.research.sources" :key="s.url">
+              <li><a :href="s.url" target="_blank" rel="noopener" class="pill-slate min-h-[32px] hover:ring-blue-500" :title="s.url" :aria-label="(s.title || s.url) + ' (opens in a new tab)'">{{ icon("external", "w-3.5 h-3.5") }} <span x-text="s.title || s.url"></span></a></li>
+            </template>
+          </ul>
+        </div>
+        <details @toggle="$event.target.open && loadResearch(f)">
+          <summary class="flex min-h-[40px] cursor-pointer items-center link">Full research notes</summary>
+          <article class="prose mt-2 max-w-none" x-html="researchNotes[f.id] || '<div class=&quot;skeleton h-4 w-2/3&quot;></div>'"></article>
+        </details>
+        <p class="text-[13px] muted" x-text="'Researched ' + vw.ago(f.research.at)"></p>
+      </div>
+    </template>
+  </section>
+
   <div>
     <h4 class="mb-2 font-semibold">Attack types</h4>
     <div class="flex flex-wrap gap-2">

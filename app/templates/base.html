@@ -20,17 +20,18 @@
   <a href="#main" class="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 btn-primary">Skip to content</a>
 
   {% set nav = [("/", "Dashboard", "shield"), ("/issues", "All vulns", "list"), ("/repos", "Repos", "box"), ("/routing", "Routing", "mail"),
-                ("/mails", "Mails", "mail"), ("/feeds", "Feeds", "news"), ("/runs", "Runs", "clock")] %}
+                ("/mails", "Mails", "mail"), ("/feeds", "Feeds", "news"), ("/runs", "Runs", "clock"),
+                ("/check", "Check a repo", "search")] %}
   {% set path = request.url.path %}
   <header x-data="{ menu: false }" @keydown.escape.window="menu = false"
           class="sticky top-0 z-40 h-14 bg-slate-950 text-white ring-1 ring-white/10">
     <div class="mx-auto flex h-full max-w-[1400px] items-center gap-3 px-4">
       <a href="/" class="flex min-h-[40px] shrink-0 items-center gap-2 rounded-lg font-semibold tracking-tight" aria-label="VulnWatch home">
         <span class="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-rose-500 to-orange-400 text-white">{{ icon("shield", "w-[18px] h-[18px]") }}</span>
-        <span>VulnWatch</span><span class="hidden text-slate-400 font-normal xl:inline">{{ cfg.ORG }}</span>
+        <span>VulnWatch</span><span class="hidden text-slate-400 font-normal 2xl:inline">{{ cfg.ORG }}</span>
       </a>
 
-      <nav class="ml-2 hidden items-center gap-0.5 lg:flex" aria-label="Main">
+      <nav class="ml-2 hidden items-center gap-0.5 xl:flex" aria-label="Main">
         {% for href, label, ic in nav %}
           {% set on = path == href or (href != "/" and path.startswith(href)) %}
           <a href="{{ href }}" {% if on %}aria-current="page"{% endif %}
@@ -59,18 +60,18 @@
           <span x-show="t === 'light'" x-cloak>{{ icon("sun", "w-5 h-5") }}</span>
           <span x-show="t === 'dark'" x-cloak>{{ icon("moon", "w-5 h-5") }}</span>
         </button>
-        <button @click="menu = !menu" class="btn-icon text-slate-200 hover:bg-white/10 lg:hidden" :aria-expanded="menu" aria-controls="mobile-nav" aria-label="Menu">
+        <button @click="menu = !menu" class="btn-icon text-slate-200 hover:bg-white/10 xl:hidden" :aria-expanded="menu" aria-controls="mobile-nav" aria-label="Menu">
           <span x-show="!menu">{{ icon("menu", "w-5 h-5") }}</span><span x-show="menu" x-cloak>{{ icon("x", "w-5 h-5") }}</span>
         </button>
       </div>
     </div>
 
     <!-- mobile sheet -->
-    <div x-show="menu" x-cloak x-transition.opacity.duration.150ms class="fixed inset-0 top-14 z-40 bg-slate-950/60 lg:hidden" @click="menu = false"></div>
+    <div x-show="menu" x-cloak x-transition.opacity.duration.150ms class="fixed inset-0 top-14 z-40 bg-slate-950/60 xl:hidden" @click="menu = false"></div>
     <nav id="mobile-nav" x-show="menu" x-cloak @click.outside="menu = false" aria-label="Main"
          x-transition:enter="transition duration-[180ms] ease-out" x-transition:enter-start="-translate-y-2 opacity-0"
          x-transition:leave="transition duration-[120ms]" x-transition:leave-end="-translate-y-2 opacity-0"
-         class="absolute inset-x-0 top-14 z-50 grid gap-1 border-b border-white/10 bg-slate-950 p-3 lg:hidden">
+         class="absolute inset-x-0 top-14 z-50 grid gap-1 border-b border-white/10 bg-slate-950 p-3 sm:grid-cols-2 xl:hidden">
       {% for href, label, ic in nav %}
         {% set on = path == href or (href != "/" and path.startswith(href)) %}
         <a href="{{ href }}" {% if on %}aria-current="page"{% endif %}

@@ -79,6 +79,21 @@ CREATE TABLE IF NOT EXISTS fixes (
   UNIQUE (repo, ecosystem, package)
 );
 
+CREATE TABLE IF NOT EXISTS research (
+  repo TEXT, ecosystem TEXT, package TEXT,
+  vuln_key TEXT,         -- advisories + versions it was done for; redo when this changes
+  notes TEXT,            -- web research (markdown)
+  decision TEXT,         -- research.Decision JSON
+  sources TEXT, queries TEXT, model TEXT, created_at TEXT,
+  PRIMARY KEY (repo, ecosystem, package)
+);
+
+CREATE TABLE IF NOT EXISTS checks (
+  id TEXT PRIMARY KEY, url TEXT, repo TEXT,
+  status TEXT,           -- queued | running | done | error
+  progress TEXT, verdict TEXT, result TEXT, error TEXT, created_at TEXT, finished_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, job TEXT, started TEXT, finished TEXT, log TEXT, ok INTEGER
 );

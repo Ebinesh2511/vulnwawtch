@@ -3,7 +3,8 @@ import threading
 import time
 import traceback
 
-from . import ai, autofix, classify, db, evidence, feeds, inventory, mailer, matcher
+from . import ai, autofix, classify, db, evidence, feeds, inventory, mailer, matcher, research
+from . import config
 from .config import INTERVAL_MIN, SCHEDULER
 
 _lock = threading.Lock()
@@ -24,6 +25,7 @@ STEPS_AFTER_MATCH = [
     lambda log: ai.run(log=log),
     lambda log: evidence.backfill(log=log),
     lambda log: classify.run(log=log),      # again: AI verdicts change priority
+    lambda log: research.run(log=log, limit=config.RESEARCH_MAX_PER_RUN),  # web research → fix decision
     lambda log: autofix.run(log=log),       # before mail, so alerts carry the PR / escalation status
     lambda log: mailer.run(log=log),
 ]
@@ -31,6 +33,7 @@ STEPS_AFTER_MATCH = [
 JOBS = {
     "ai": lambda log: (ai.run(log=log), evidence.backfill(log=log), classify.run(log=log)),
     "classify": lambda log: classify.run(log=log),
+    "research": lambda log: research.run(log=log),
     "autofix": lambda log: autofix.run(log=log),
     "mail": lambda log: mailer.run(log=log),
     "pipeline": _pipeline,

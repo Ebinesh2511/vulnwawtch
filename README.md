@@ -73,6 +73,20 @@ Every fix is checked by reading the changed files back and asking OSV.dev whethe
 - `AUTOFIX_MODE=pr`: pushes the branch and opens a PR against the tracked branch (uses your `gh` login).
 - `AUTOFIX_MODE=off`: no fixes, no escalations.
 
+## Check any public repo (`/check`, `app/checker.py`)
+
+Paste a GitHub link (or `owner/repo`, or a `/tree/branch` link). Private repos are refused.
+
+- Reads dependency files and `.github/workflows/*.yml` through the GitHub API. Nothing is cloned or run.
+- Each exact package version is checked with OSV.dev. **Malware** = OSV `MAL-` entries, advisories tagged CWE-506, or summaries naming the package as malware or a compromised release (not "a malicious user could…" bugs).
+- GitHub Actions: OSV lists action advisories but does not compare versions, so tags are compared here. `v45` follows its major line; `v45.0.7` is exact. Actions pinned to a branch or commit are shown as "check manually".
+- **Verdicts:**
+  - **Compromised:** malware or a hijacked action.
+  - **At risk:** exploited-in-the-wild or critical bugs.
+  - **Needs attention:** other known bugs.
+  - **Clean:** no known issues. This is not a guarantee: the repo's own code and unreported malware aren't checked.
+- Every check gets a shareable URL `/check/<id>`. Results are stored in the `checks` table.
+
 ## Tracking repos
 
 Repos page: switch repos on/off, filter by "Idle 6m+", bulk track/untrack. Untracked repos are skipped by scans, AI, dashboard, mails and auto-fix; their data is kept. New repos that appear in the org start tracked.

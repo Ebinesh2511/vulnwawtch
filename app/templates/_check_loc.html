@@ -1,0 +1,5 @@
+{% from "_ui.html" import icon %}{# expects Alpine `l` = {file, line, url} #}
+<a :href="l.url" target="_blank" rel="noopener" class="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg bg-[#0d1117] px-3 font-mono text-[13px] text-slate-200 ring-1 ring-slate-800 hover:ring-2 hover:ring-blue-500"
+   :aria-label="l.file + (l.line ? ' line ' + l.line : '') + ' on GitHub (opens in a new tab)'">
+  {{ icon("code", "w-3.5 h-3.5 text-slate-400") }}<span x-text="l.file + (l.line ? ':' + l.line : '')"></span>{{ icon("external", "w-3.5 h-3.5 text-slate-400") }}
+</a>

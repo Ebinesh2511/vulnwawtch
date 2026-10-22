@@ -48,9 +48,11 @@ CWE = {
     "crypto": [295, 297, 326, 327, 328, 330, 338, 310, 916, 208, 203],
     "xss": [79, 80, 83, 87, 116, 1004, 1021, 942, 451],
     "leak": [200, 201, 209, 212, 359, 532, 524, 538, 1295, 497],
-    "redirect": [601, 352, 183, 184, 1385],
-    "dos": [400, 770, 789, 1333, 674, 834, 835, 407, 776, 409, 1050, 405, 369, 476, 248, 755, 617, 1284, 20, 703],
+    "redirect": [601, 352, 1385],
+    "dos": [400, 770, 789, 1333, 674, 834, 835, 407, 776, 409, 1050, 405, 369, 476, 248, 755, 617, 1284, 703],
 }
+# generic CWEs (20 input validation, 183/184 allow/deny lists, 697 comparison) are left out on purpose:
+# they say nothing about impact, so the advisory text decides instead
 CWE_CAT = {}
 for _cat, _ids in CWE.items():
     for _i in _ids:

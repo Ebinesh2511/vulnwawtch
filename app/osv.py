@@ -60,5 +60,7 @@ def fixed_versions(record, ecosystem, name):
         p = a.get("package", {})
         if p.get("ecosystem", "").split(":")[0] == ecosystem and p.get("name") == name:
             for r in a.get("ranges", []):
+                if r.get("type") == "GIT":   # commit hashes, not versions
+                    continue
                 fixed += [e["fixed"] for e in r.get("events", []) if "fixed" in e]
     return sorted(set(fixed))

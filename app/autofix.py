@@ -20,7 +20,7 @@ import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
 
-from . import config, db, findings, gh, mailer, manifests, osv
+from . import config, db, findings, gh, mailer, manifests, osv, research
 from .config import BOT_EMAIL, BOT_NAME, CLONES, DASHBOARD_URL, FIXES, ORG
 
 
@@ -51,31 +51,47 @@ def _locations(f):
 
 
 def plan(f):
-    """-> (kind, detail). kind 'escalate' means a human should do it."""
+    """-> (kind, detail, target). kind 'escalate' means a human should do it.
+    The research decision (web research on the advisories) wins over the plain version rules."""
     eco, pkg, target = f["ecosystem"], f["package"], (f["target"] or "").lstrip("v")
+    r = research.get(f)
+    d = r["decision"] if r else {}
+    major_ok = False
+    if d:
+        if d.get("needs_human") or d.get("effort") == "large":
+            return "escalate", d.get("human_reason") or "Research says this needs a developer.", target
+        if d.get("code_changes_needed"):
+            return "escalate", f"The fix needs code changes: {d.get('code_change_summary') or 'see the research'}", target
+        if d.get("strategy") in ("no_fix_available", "replace_library", "config_mitigation", "remove_unused"):
+            label = {"no_fix_available": "No fixed version exists yet", "replace_library": "The library should be replaced",
+                     "config_mitigation": "Needs a configuration change", "remove_unused": "The library looks unused and can be removed"}
+            return "escalate", f"{label[d['strategy']]}. Mitigation now: {d.get('mitigation_now') or 'see the research'}", target
+        target = (d.get("target_version") or target).lstrip("v")
+        # research checked the breaking changes against our usage: a clean major bump may be automated
+        major_ok = d.get("strategy") == "major_upgrade" and d.get("effort") == "trivial"
     if not target:
-        return "escalate", "No fixed version has been published yet."
+        return "escalate", "No fixed version has been published yet.", target
     if eco == "Go" and pkg == "stdlib":
-        return "escalate", f"Needs a Go toolchain upgrade to {target} (Docker image / CI Go version), not a library bump."
+        return "escalate", f"Needs a Go toolchain upgrade to {target} (Docker image / CI Go version), not a library bump.", target
     if eco not in ("PyPI", "npm", "Go"):
-        return "escalate", f"{eco} fixes are not automated yet."
+        return "escalate", f"{eco} fixes are not automated yet.", target
     major = [v for v in f["versions"] if not compatible(v, target)]
-    if major:
+    if major and not major_ok:
         return "escalate", (f"Major upgrade {major[0]} → {target}: breaking changes are likely, "
-                            "so a developer has to upgrade and test it.")
+                            "so a developer has to upgrade and test it."), target
     locs = _locations(f)
     if eco == "PyPI":
         if any(PurePosixPath(l["manifest"]).name.startswith("requirements") for l in locs):
-            return "pip_pin", ""
-        return "escalate", "Not pinned in a requirements*.txt file (poetry/pipenv/pyproject are not automated yet)."
+            return "pip_pin", "", target
+        return "escalate", "Not pinned in a requirements*.txt file (poetry/pipenv/pyproject are not automated yet).", target
     if eco == "npm":
         locks = {l["manifest"] for l in locs}
         if not locks or any(not m.endswith("package-lock.json") for m in locks):
-            return "escalate", "Only npm package-lock.json projects are automated (yarn/pnpm are not yet)."
-        return ("npm_direct" if any(l["direct"] for l in locs) else "npm_override"), ""
+            return "escalate", "Only npm package-lock.json projects are automated (yarn/pnpm are not yet).", target
+        return ("npm_direct" if any(l["direct"] for l in locs) else "npm_override"), "", target
     if any(l["manifest"].endswith("go.mod") for l in locs):
-        return "go_get", ""
-    return "escalate", "No go.mod entry found to update."
+        return "go_get", "", target
+    return "escalate", "No go.mod entry found to update.", target
 
 
 # ---------- applying ----------
@@ -263,7 +279,8 @@ def _save(f, **kw):
 
 
 def handle(f, log=print):
-    kind, detail = plan(f)
+    kind, detail, target = plan(f)
+    f = {**f, "target": target}
     steps = []
     if kind != "escalate":
         try:
@@ -276,7 +293,7 @@ def handle(f, log=print):
             kind = "escalate"
     _save(f, kind="escalate", status="escalated", reason=detail, log="\n".join(steps),
           branch=None, files=[], diff=None, pr_url=None)
-    mailed = f["priority"] <= config.ESCALATE_MAX_PRIORITY and mailer.escalate(f, detail)
+    mailed = f["priority"] <= config.ESCALATE_MAX_PRIORITY and mailer.escalate(f, detail, research.get(f))
     log(f"  fix {f['repo']}/{f['package']}: escalated{' + mail' if mailed else ''}: {detail[:90]}")
 
 
