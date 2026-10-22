@@ -37,6 +37,7 @@ AI_MAX_PER_RUN = int(env("AI_MAX_PER_RUN", "10"))  # cap Gemini work per run
 # Auto-fix: off | dry_run (branch + diff locally, nothing pushed) | pr (push branch + open a PR)
 AUTOFIX_MODE = env("AUTOFIX_MODE", "dry_run")
 AUTOFIX_MAX_PER_RUN = int(env("AUTOFIX_MAX_PER_RUN", "5"))
+AUTOFIX_PR_DRAFT = env("AUTOFIX_PR_DRAFT", "true") == "true"  # open PRs as drafts so nothing merges by accident
 RESEARCH_MAX_PER_RUN = int(env("RESEARCH_MAX_PER_RUN", "10"))  # web research is the slowest step (~1 min each)
 # hard-to-fix findings at this priority or more urgent (0 = P0, 1 = P1) get an escalation mail
 ESCALATE_MAX_PRIORITY = int(env("ESCALATE_MAX_PRIORITY", "1"))

@@ -55,6 +55,15 @@ Open http://127.0.0.1:8000 and press **Run full check**.
 
 Models are comma lists tried in order. `gemini-flash-latest` is not the default: in testing it blocked about half of security prompts (`BlockedReason.OTHER`).
 
+## Research (`app/research.py`)
+
+Before fixing, every confirmed finding is researched on the web (Gemini with Google Search grounding, `RESEARCH_MAX_PER_RUN` per run). The research covers each advisory's root cause, whether this repo's usage reaches it, the lowest version that fixes everything, breaking changes on the way there, and workarounds. It cites sources. A second step turns that into a decision: strategy, target version, code changes, effort, `needs_human`. The fixer follows the decision:
+
+- **Easy** (trivial or small effort, no code changes, a fixed version exists) → auto-fix as below.
+- **Hard** (code changes needed, large effort, no fix, replace the library, risky major upgrade) → escalated. The escalation mail asks for help and carries the research, sources and full **developer instructions**: branch, exact commands, before/after code, tests, mitigation and rollback.
+
+Dashboard: open a finding → **Research** (decision chips, summary, sources, full notes, "Research again").
+
 ## Auto-fix and escalation (`app/autofix.py`)
 
 Runs after AI review for confirmed, open findings (at most `AUTOFIX_MAX_PER_RUN` per run, most urgent first).
@@ -70,7 +79,7 @@ Runs after AI review for confirmed, open findings (at most `AUTOFIX_MAX_PER_RUN`
 Every fix is checked by reading the changed files back and asking OSV.dev whether the advisories are gone, then committed by `VulnWatch Bot` on `vulnwatch/fix-<pkg>-<version>` in a temporary git worktree. No package or repo scripts run.
 
 - `AUTOFIX_MODE=dry_run` (default): branch + diff stay local and show on the dashboard. **Nothing is pushed.**
-- `AUTOFIX_MODE=pr`: pushes the branch and opens a PR against the tracked branch (uses your `gh` login).
+- `AUTOFIX_MODE=pr`: pushes the branch and opens a PR against the tracked branch, using your `gh` login. PRs are drafts unless `AUTOFIX_PR_DRAFT=false`. An open PR for the same branch is reused, never duplicated. The description includes the research summary, advisories, what changed, how it was verified, today's mitigation and sources. In this mode the dashboard also shows a **Create PR** button on prepared fixes.
 - `AUTOFIX_MODE=off`: no fixes, no escalations.
 
 ## Check any public repo (`/check`, `app/checker.py`)

@@ -100,7 +100,7 @@
            class="pointer-events-auto flex w-full max-w-sm items-center gap-3 rounded-xl bg-slate-900 px-4 py-3 text-sm text-white shadow-2xl ring-1 ring-white/10 dark:bg-slate-800">
         <span class="h-2 w-2 shrink-0 rounded-full" :class="{ ok: 'bg-emerald-400', error: 'bg-red-400', info: 'bg-blue-400' }[t.kind]"></span>
         <span class="flex-1" x-text="t.message"></span>
-        <button x-show="t.undo" @click="t.undo(); remove(t.id)" class="rounded px-2 py-1 font-semibold text-blue-300 hover:bg-white/10">Undo</button>
+        <button x-show="!!t.undo" @click="t.undo(); remove(t.id)" class="rounded px-2 py-1 font-semibold text-blue-300 hover:bg-white/10">Undo</button>
         <button @click="remove(t.id)" class="rounded p-1 text-slate-400 hover:text-white" aria-label="Dismiss">{{ icon("x") }}</button>
       </div>
     </template>

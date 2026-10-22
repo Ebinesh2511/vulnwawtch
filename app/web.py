@@ -96,6 +96,14 @@ def api_fix(iid: int):
     return {"started": jobs.run(f"fix #{iid}", lambda log: autofix.fix_one(iid, log=log))}
 
 
+@app.post("/api/findings/{iid}/pr")
+def api_pr(iid: int):
+    """Open the PR for a prepared fix. Only allowed in AUTOFIX_MODE=pr."""
+    if config.AUTOFIX_MODE != "pr":
+        return JSONResponse({"error": "Pull requests are off. Set AUTOFIX_MODE=pr in .env and restart."}, 400)
+    return {"started": jobs.run(f"pr #{iid}", lambda log: autofix.fix_one(iid, log=log, open_pr=True))}
+
+
 @app.post("/api/findings/{iid}/analyze")
 def api_analyze(iid: int):
     return {"started": jobs.run(f"ai #{iid}", lambda log: (ai.analyze_issue(iid, log=log), classify.run(log=log)))}

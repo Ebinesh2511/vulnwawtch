@@ -116,6 +116,50 @@ def _decide(facts, notes):
     raise RuntimeError("Decision failed: " + " | ".join(errors))
 
 
+INSTRUCTIONS_PROMPT = """A developer has to fix this by hand (the automated fixer could not, see "Why a human").
+Write complete, step-by-step instructions in GitHub-flavoured markdown so they can finish it in one sitting:
+
+## What and why
+Two or three lines: the risk for this repo and why it cannot be a plain version bump.
+
+## Before you start
+Branch name to use, and anything to check first (current usage, tests that exist).
+
+## Steps
+Numbered, with exact commands for this repo's package manager and exact file paths. Show before/after code for every
+code change, based on the usage shown and the breaking changes found in the research. Use the target version from the decision.
+
+## Test
+How to prove it works (commands, pages or flows to click through) and how to confirm the vulnerable version is gone.
+
+## If you cannot upgrade yet
+The mitigation to apply today.
+
+## Rollback
+
+## Sources
+The links from the research.
+Do not invent APIs or versions."""
+
+
+def instructions(f, log=print):
+    """Developer instructions for an escalated finding, built from the research (cached)."""
+    r = get(f)
+    if not r:
+        return ""
+    if r.get("instructions"):
+        return r["instructions"]
+    from .ai import _gen
+    fx = db.one("SELECT reason FROM fixes WHERE repo=? AND ecosystem=? AND package=?", f["repo"], f["ecosystem"], f["package"])
+    prompt = (_facts(f) + "\n<research>\n" + r["notes"][:12000] + "\n</research>\n<decision>\n" + json.dumps(r["decision"])
+              + "\n</decision>\n<sources>\n" + "\n".join(s["url"] for s in r["sources"]) + "\n</sources>\n"
+              + f"Why a human: {(fx or {}).get('reason') or r['decision'].get('human_reason')}\n\n" + INSTRUCTIONS_PROMPT)
+    text = _gen(GUIDE_MODELS, prompt)
+    db.x("UPDATE research SET instructions=? WHERE repo=? AND ecosystem=? AND package=?", text, f["repo"], f["ecosystem"], f["package"])
+    log(f"  instructions {f['repo']}/{f['package']}: {len(text)} chars")
+    return text
+
+
 def _key(f):
     return json.dumps(sorted(v["id"] for v in f["vulns"]) + f["versions"])
 
@@ -140,7 +184,7 @@ def research(f, log=print, force=False):
             VALUES(?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(repo, ecosystem, package) DO UPDATE SET vuln_key=excluded.vuln_key, notes=excluded.notes,
               decision=excluded.decision, sources=excluded.sources, queries=excluded.queries, model=excluded.model,
-              created_at=excluded.created_at""",
+              created_at=excluded.created_at, instructions=NULL""",
          f["repo"], f["ecosystem"], f["package"], _key(f), notes, decision.model_dump_json(), json.dumps(sources),
          json.dumps(queries), model, db.now())
     d = decision

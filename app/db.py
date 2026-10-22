@@ -128,7 +128,7 @@ def init():
         c.executescript(SCHEMA)
         # columns added after the first release
         for table, col, decl in [("issues", "category", "TEXT"), ("issues", "priority", "INTEGER"),
-                                 ("issues", "dev_only", "INTEGER DEFAULT 0"), ("issues", "evidence", "TEXT"),
+                                 ("issues", "dev_only", "INTEGER DEFAULT 0"), ("issues", "evidence", "TEXT"), ("research", "instructions", "TEXT"),
                                  ("deps", "dev", "INTEGER DEFAULT 0")]:
             if col not in [r[1] for r in c.execute(f"PRAGMA table_info({table})")]:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")

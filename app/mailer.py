@@ -5,6 +5,8 @@ and still open. MAIL_MODE=dry_run stores the mail as a preview; MAIL_MODE=send d
 """
 import fnmatch
 import html
+
+from markdown_it import MarkdownIt
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -144,6 +146,8 @@ def deliver(mail_id):
         return False
 
 
+_MD = MarkdownIt("commonmark", {"html": False}).enable("table")  # AI text is escaped, never raw HTML
+
 STRATEGY = {"patch_upgrade": "Patch upgrade", "minor_upgrade": "Minor upgrade", "major_upgrade": "Major upgrade",
             "override_transitive": "Override the pulled-in version", "config_mitigation": "Configuration change",
             "replace_library": "Replace the library", "remove_unused": "Remove the unused library",
@@ -155,6 +159,16 @@ def escalate(f, reason, res=None):
     behind that call. Once per target."""
     d = (res or {}).get("decision") or {}
     sources = (res or {}).get("sources") or []
+    steps = ""
+    if res:
+        try:
+            from . import research
+            steps = research.instructions(f)
+        except Exception:
+            steps = ""
+    if not steps:
+        g = db.one("SELECT guide FROM issues WHERE id=?", f["id"])
+        steps = (g or {}).get("guide") or ""
     sev = "CRITICAL" if f["kev"] else f["severity"]
     to = recipients(f["repo"], sev)
     if not to:
@@ -185,6 +199,7 @@ def escalate(f, reason, res=None):
     text = "\n".join([f"{pcode} · {sev} · we need your help: this can't be fixed automatically", "",
                       *[f"{k.upper()}: {v}" for k, v in rows], "", f"Advisories: {more}",
                       *(["Sources:"] + [f"  - {x['title']}: {x['url']}" for x in sources[:5]] if sources else []),
+                      *(["", "=" * 60, "HOW TO FIX IT (step by step)", "=" * 60, steps] if steps else []),
                       f"Step-by-step guide: {link}" + (f"\nCode: {decl['url']}" if decl else ""), "",
                       "— VulnWatch (automated)."])
     cell = "padding:6px 10px;vertical-align:top;border-bottom:1px solid #eee"
@@ -199,9 +214,11 @@ def escalate(f, reason, res=None):
 <table style="border-collapse:collapse;width:100%">{trs}</table>
 <p style="font-size:12px;color:#64748b">Advisories: {html.escape(more)}</p>
 {"<p style='font-size:12px;color:#64748b;margin:0'>Sources:</p><ul style='font-size:12px;margin-top:2px'>" + "".join(f"<li><a href='{html.escape(x['url'])}' style='color:#2563eb'>{html.escape(x['title'] or x['url'])}</a></li>" for x in sources[:5]) + "</ul>" if sources else ""}
-<p><a href="{html.escape(link)}" style="background:#0f172a;color:#fff;padding:8px 14px;border-radius:6px;text-decoration:none;display:inline-block">Open fix guide →</a>
+<p><a href="{html.escape(link)}" style="background:#0f172a;color:#fff;padding:8px 14px;border-radius:6px;text-decoration:none;display:inline-block">Open on the dashboard →</a>
 {f'&nbsp;<a href="{html.escape(decl["url"])}" style="color:#2563eb">View code on GitHub</a>' if decl else ''}</p>
-<p style="font-size:12px;color:#94a3b8">VulnWatch (automated).</p></div>"""
+{('<h2 style="font-size:16px;margin:24px 0 8px;border-top:1px solid #e2e8f0;padding-top:16px">How to fix it, step by step</h2>'
+  '<div style="line-height:1.55">' + _MD.render(steps).replace('<pre>', '<pre style="background:#0f172a;color:#e2e8f0;padding:10px 12px;border-radius:6px;overflow-x:auto;font-size:12px">') + '</div>') if steps else ''}
+<p style="font-size:12px;color:#94a3b8">VulnWatch (automated). Reply to this mail if you need more help.</p></div>"""
     made = False
     for r in to:
         if db.one("SELECT 1 FROM mails WHERE group_key=? AND recipient=?", key, r):

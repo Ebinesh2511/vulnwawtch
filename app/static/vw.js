@@ -130,6 +130,14 @@ document.addEventListener("alpine:init", () => {
       vw.toast(r.started ? `Preparing a fix for ${f.package}…` : "Another job is running; try again in a moment.", { kind: r.started ? "ok" : "info" });
       setTimeout(() => { this.busy[f.id] = false; }, 4000);
     },
+    async openPr(f) {
+      if (!confirm(`Push branch ${f.autofix.branch} to ${f.repo} and open a pull request?`)) return;
+      this.busy[f.id] = true;
+      const r = await fetch(`/api/findings/${f.id}/pr`, { method: "POST" });
+      const d = await r.json();
+      vw.toast(r.ok ? (d.started ? `Opening a PR for ${f.package}…` : "Another job is running; try again in a moment.") : d.error, { kind: r.ok && d.started ? "ok" : "error" });
+      setTimeout(() => { this.busy[f.id] = false; }, 4000);
+    },
     async analyze(f) {
       const r = await vw.post(`/api/findings/${f.id}/analyze`);
       vw.toast(r.started ? `AI review started for ${f.package}` : "Another job is running; try again in a moment.", { kind: r.started ? "ok" : "info" });

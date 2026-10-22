@@ -75,7 +75,8 @@
       <h4 class="font-semibold">Auto-fix</h4>
       <template x-if="f.autofix"><span :class="FIX[f.autofix.status].pill" x-text="FIX[f.autofix.status].label"></span></template>
       <span class="pill-slate" x-text="(autofixMode || 'dry_run').replace('_', ' ')"></span>
-      <button x-show="autofixMode !== 'off'" @click="fixNow(f)" :disabled="busy[f.id]" class="btn-secondary ml-auto">
+      <button x-show="autofixMode === 'pr' && f.autofix && f.autofix.status === 'ready'" @click="openPr(f)" :disabled="busy[f.id]" class="btn-primary ml-auto">{{ icon("pr") }} Create PR</button>
+      <button x-show="autofixMode !== 'off'" @click="fixNow(f)" :disabled="busy[f.id]" class="btn-secondary" :class="!(autofixMode === 'pr' && f.autofix && f.autofix.status === 'ready') && 'ml-auto'">
         <span x-text="busy[f.id] ? 'Working…' : (f.autofix ? 'Retry fix' : 'Prepare fix')"></span></button>
     </div>
     <p x-show="!f.autofix" class="mt-2 muted">Not tried yet. Runs automatically for confirmed findings on the next check.</p>
@@ -84,7 +85,7 @@
         <p x-show="f.autofix.reason"><b x-text="f.autofix.status === 'escalated' ? 'Why a developer is needed: ' : 'Note: '"></b><span x-text="f.autofix.reason"></span></p>
         <p x-show="f.autofix.branch" class="muted">Branch <code class="font-mono" x-text="f.autofix.branch"></code> · <span x-text="files(f.autofix).join(', ')"></span></p>
         <p x-show="f.autofix.pr_url"><a :href="f.autofix.pr_url" target="_blank" rel="noopener" class="link inline-flex items-center gap-1">{{ icon("pr") }} Open the pull request {{ icon("external", "w-3.5 h-3.5") }}</a></p>
-        <p x-show="f.autofix.status === 'ready'" class="muted">Dry run: nothing was pushed. Set <code class="font-mono">AUTOFIX_MODE=pr</code> to open PRs.</p>
+        <p x-show="f.autofix.status === 'ready' && autofixMode !== 'pr'" class="muted">Dry run: nothing was pushed. Set <code class="font-mono">AUTOFIX_MODE=pr</code> in .env to open PRs.</p>
         <details x-show="f.autofix.diff" class="overflow-hidden rounded-lg bg-[#0d1117] ring-1 ring-slate-800">
           <summary class="flex min-h-[40px] cursor-pointer items-center bg-[#161b22] px-3 font-mono text-[13px] text-slate-200">View diff (lockfile changes summarised)</summary>
           <div class="max-h-96 overflow-auto py-1.5 font-mono text-[13px] leading-6">

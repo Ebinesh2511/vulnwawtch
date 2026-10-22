@@ -15,9 +15,11 @@ other package managers, or any auto-fix attempt that fails. P0/P1 ones get an es
 Package tools run with --ignore-scripts / --package-lock-only, so no repo or package code is executed.
 """
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path, PurePosixPath
 
 from . import config, db, findings, gh, mailer, manifests, osv, research
@@ -58,6 +60,7 @@ def plan(f):
     d = r["decision"] if r else {}
     major_ok = False
     if d:
+        target = (d.get("target_version") or target).lstrip("v")   # the researched target, also for escalations
         if d.get("needs_human") or d.get("effort") == "large":
             return "escalate", d.get("human_reason") or "Research says this needs a developer.", target
         if d.get("code_changes_needed"):
@@ -66,7 +69,6 @@ def plan(f):
             label = {"no_fix_available": "No fixed version exists yet", "replace_library": "The library should be replaced",
                      "config_mitigation": "Needs a configuration change", "remove_unused": "The library looks unused and can be removed"}
             return "escalate", f"{label[d['strategy']]}. Mitigation now: {d.get('mitigation_now') or 'see the research'}", target
-        target = (d.get("target_version") or target).lstrip("v")
         # research checked the breaking changes against our usage: a clean major bump may be automated
         major_ok = d.get("strategy") == "major_upgrade" and d.get("effort") == "trivial"
     if not target:
@@ -208,29 +210,70 @@ def _verify(wt, f, files, log):
 
 
 def _pr_body(f, target, new_versions, files):
+    r = research.get(f) or {}
+    d = r.get("decision") or {}
     ids = [v["id"] for v in f["vulns"]][:12]
-    return "\n".join([
-        f"## Security fix: `{f['package']}` {f['version']} → {target}",
+    sev = {"CRITICAL": "🔴", "HIGH": "🟠", "MODERATE": "🟡"}.get(f["severity"], "⚪")
+    lines = [
+        f"## {sev} Security fix: `{f['package']}` {f['version']} → `{target}`",
         "",
-        f"VulnWatch confirmed **{f['vuln_count']} advisor{'y' if f['vuln_count'] == 1 else 'ies'}** affecting this repo "
-        f"(worst: {f['severity']}{', exploited in the wild' if f['kev'] else ''}).",
+        d.get("summary") or f"Fixes {f['vuln_count']} known advisories in `{f['package']}`.",
         "",
-        f"**Impact:** {f['impact'] or f['problem']}",
+        "### Why",
+        f"- **Impact on this repo:** {f['impact'] or f['problem']}",
+        f"- **Severity:** {f['severity']}{' · exploited in the wild (CISA KEV)' if f['kev'] else ''}"
+        + (f" · reachable from our code: {d['exploitability']}" if d.get("exploitability") else ""),
+        f"- **Advisories ({f['vuln_count']}):** " + ", ".join(f"[{i}](https://osv.dev/vulnerability/{i})" for i in ids)
+        + (" …" if f["vuln_count"] > len(ids) else ""),
         "",
-        f"**Change:** upgrade within the same major version ({', '.join(new_versions)}). Files: "
-        + ", ".join(f"`{x}`" for x in files),
+        "### What changed",
+        f"- Upgraded `{f['package']}` to {', '.join(f'`{v}`' for v in new_versions)} "
+        f"({'same major version' if all(compatible(v, target) for v in f['versions']) else 'major upgrade, checked against our usage'}).",
+        "- Files: " + ", ".join(f"`{x}`" for x in files),
+        f"- Code changes: {d.get('code_change_summary') or 'none needed'}",
+        f"- Breaking changes for this repo: {d.get('breaking_changes') or 'none expected'}",
         "",
-        "**Verified:** OSV.dev reports none of these advisories for the new version.",
+        "### How it was checked",
+        "- The changed manifest/lockfile was read back and every new version was checked on OSV.dev: none of the advisories above remain.",
+        "- Package scripts were not run (`--ignore-scripts`, lockfile-only update).",
         "",
-        "Advisories: " + ", ".join(ids) + (" …" if f["vuln_count"] > len(ids) else ""),
-        "",
-        f"Full fix guide: {DASHBOARD_URL}/issues/{f['id']}",
-        "",
-        "_Automated by VulnWatch. Please run the test suite and review before merging._",
-    ])
+        "### Before merging",
+        "- [ ] CI is green",
+        "- [ ] App starts and the main flows work",
+    ]
+    if d.get("mitigation_now"):
+        lines += ["", f"_If this cannot be merged soon:_ {d['mitigation_now']}"]
+    if r.get("sources"):
+        lines += ["", "### Sources"] + [f"- [{s['title'] or s['url']}]({s['url']})" for s in r["sources"][:6]]
+    if not re.search(r"//(127\.0\.0\.1|localhost)", DASHBOARD_URL):   # a local dashboard link is useless to reviewers
+        lines += ["", f"Full details: {DASHBOARD_URL}/issues/{f['id']}"]
+    lines += ["", "_Opened automatically by VulnWatch._"]
+    return "\n".join(lines)
 
 
-def apply(f, kind, log):
+def _open_pr(repo, wt, branch, base, title, body, log):
+    """Push the fix branch and open a pull request (draft unless AUTOFIX_PR_DRAFT=false). Reuses an open PR
+    for the same branch, so re-running never opens duplicates."""
+    _sh(["git", "push", "--force-with-lease", "origin", f"HEAD:refs/heads/{branch}"], wt, log, env=gh.git_env())
+    existing = gh.run(["pr", "list", "--repo", f"{ORG}/{repo}", "--head", branch, "--state", "open",
+                       "--json", "url", "-q", ".[0].url"]).strip()
+    if existing:
+        log.append(f"PR already open: {existing}")
+        return existing
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as fh:
+        fh.write(body)
+    try:
+        args = ["pr", "create", "--repo", f"{ORG}/{repo}", "--base", base, "--head", branch, "--title", title, "--body-file", fh.name]
+        if config.AUTOFIX_PR_DRAFT:
+            args.append("--draft")
+        url = gh.run(args, timeout=120).strip().splitlines()[-1]
+    finally:
+        os.unlink(fh.name)
+    log.append(f"PR opened: {url}")
+    return url
+
+
+def apply(f, kind, log, open_pr=False):
     target = f["target"].lstrip("v")
     branch = f"vulnwatch/fix-{_slug(f['package'])}-{_slug(target)}"
     clone, wt, base = _fresh_worktree(f["repo"], branch, log)
@@ -253,13 +296,9 @@ def apply(f, kind, log):
         diff = stat + "\n" + diff[:30000]
 
         pr_url, status = None, "ready"
-        if config.AUTOFIX_MODE == "pr":
-            _sh(["git", "push", "-f", "origin", f"HEAD:refs/heads/{branch}"], wt, log, env=gh.git_env())
-            existing = gh.run(["pr", "list", "--repo", f"{ORG}/{f['repo']}", "--head", branch, "--json", "url", "-q", ".[0].url"]).strip()
-            pr_url = existing or gh.run(["pr", "create", "--repo", f"{ORG}/{f['repo']}", "--base", base,
-                                         "--head", branch, "--title", title, "--body", body]).strip().splitlines()[-1]
+        if open_pr:
+            pr_url = _open_pr(f["repo"], wt, branch, base, title, body, log)
             status = "pr_opened"
-            log.append(f"PR: {pr_url}")
         return {"status": status, "branch": branch, "files": files, "diff": diff, "pr_url": pr_url}
     finally:
         subprocess.run(["git", "-C", str(clone), "worktree", "remove", "--force", str(wt)], capture_output=True)
@@ -278,13 +317,16 @@ def _save(f, **kw):
         db.x(f"INSERT INTO fixes({', '.join(cols)}) VALUES({', '.join('?' * len(cols))})", *cols.values())
 
 
-def handle(f, log=print):
+def handle(f, log=print, open_pr=None):
+    """open_pr: None = follow AUTOFIX_MODE; True = open a PR now (dashboard button, only offered in pr mode)."""
+    if open_pr is None:
+        open_pr = config.AUTOFIX_MODE == "pr"
     kind, detail, target = plan(f)
     f = {**f, "target": target}
     steps = []
     if kind != "escalate":
         try:
-            res = apply(f, kind, steps)
+            res = apply(f, kind, steps, open_pr=open_pr)
             _save(f, kind=kind, reason=None, log="\n".join(steps), **res)
             log(f"  fix {f['repo']}/{f['package']}: {res['status']} ({kind}) {res['pr_url'] or ''}")
             return
@@ -311,7 +353,7 @@ def run(log=print, limit=None):
     log(f"autofix: {len(todo)} finding(s) handled, mode={config.AUTOFIX_MODE}")
 
 
-def fix_one(iid, log=print):
-    """Dashboard button: (re)try one finding now."""
+def fix_one(iid, log=print, open_pr=None):
+    """Dashboard buttons: (re)try one finding now, optionally opening its PR."""
     f = next(f for f in findings.build() if iid in f["ids"])
-    handle(f, log=log)
+    handle(f, log=log, open_pr=open_pr)
