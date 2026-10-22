@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+jinja2
+python-multipart
+google-genai
+python-dotenv
+markdown-it-py

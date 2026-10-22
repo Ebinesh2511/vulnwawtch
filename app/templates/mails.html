@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, page_header, routing_banner %}
+{% block title %}Mails{% endblock %}
+{% block content %}
+<div x-data="{ async build() { const r = await vw.post('/api/run/mail'); vw.toast(r.started ? 'Building mails for analysed findings…' : 'A job is already running.', { kind: r.started ? 'ok' : 'info' }); },
+               async sendAll() { if (!confirm('Send {{ previews }} preview or failed mail(s) now?')) return; const r = await vw.post('/api/mails/send-previews'); vw.toast(r.started ? 'Sending…' : 'Could not start sending.', { kind: r.started ? 'ok' : 'error' }); } }">
+  {% call page_header("Mails", "Alerts and escalations sent to team leads, one per library finding.") %}
+    <span class="{{ 'pill-green' if cfg.MAIL_MODE == 'send' else 'pill-blue' }}">{{ 'Sending' if cfg.MAIL_MODE == 'send' else 'Dry run: previews only' }}</span>
+    {% if rules_missing() %}
+      <span title="Add a routing rule first"><button class="btn-secondary" disabled>Build mails now</button></span>
+    {% else %}
+      <button @click="build()" class="btn-secondary">Build mails now</button>
+    {% endif %}
+    {% if smtp and previews %}<button @click="sendAll()" class="btn-primary">Send {{ previews }} preview(s)</button>{% endif %}
+  {% endcall %}
+
+  {{ routing_banner() }}
+
+  {% if rows %}
+  <ul class="card divide-y divide-slate-100 dark:divide-slate-800">
+    {% for m in rows %}
+    <li><a href="/mails/{{ m.id }}" class="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 transition duration-[120ms] hover:bg-slate-50 dark:hover:bg-slate-800/50">
+      <span class="min-w-0 flex-1"><span class="block truncate font-medium">{{ m.subject }}</span>
+        <span class="muted">to {{ m.recipient }} · <span x-data x-text="vw.ago('{{ m.created_at }}')" title="{{ m.created_at }}"></span></span></span>
+      <span class="{{ {'sent': 'pill-green', 'error': 'pill-red'}.get(m.status, 'pill-slate') }}" {% if m.error %}title="{{ m.error }}"{% endif %}>
+        {{ {'sent': 'Sent', 'error': 'Failed', 'preview': 'Preview'}.get(m.status, m.status) }}</span>
+    </a></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="card flex flex-col items-center gap-3 p-10 text-center">
+    <span class="grid h-12 w-12 place-items-center rounded-full bg-slate-100 muted dark:bg-slate-800">{{ icon("mail", "w-6 h-6") }}</span>
+    <p class="font-medium">No mails yet</p>
+    {% if rules_missing() %}
+      <p class="max-w-md muted">Mails are created for analysed findings that match a routing rule, and there are no rules yet.</p>
+      <a href="/routing?add=catchall" class="btn-primary">{{ icon("plus") }} Set up routing</a>
+    {% else %}
+      <p class="max-w-md muted">Mails appear here after the next check finds an analysed finding that matches a rule.</p>
+      <button @click="build()" class="btn-secondary">Build mails now</button>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

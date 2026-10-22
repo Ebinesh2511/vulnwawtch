@@ -1,0 +1,108 @@
+{% from "_ui.html" import icon %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}VulnWatch{% endblock %} · VulnWatch</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f43f5e' stroke-width='2'%3E%3Cpath d='M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z'/%3E%3C/svg%3E">
+  <script>
+    // theme before first paint: light | dark | system
+    (function () { let t = "system"; try { t = localStorage.getItem("vw-theme") || "system"; } catch (e) {}
+      const d = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.classList.toggle("dark", d); document.documentElement.dataset.theme = t; })();
+  </script>
+  <link rel="stylesheet" href="/static/app.css?v={{ asset_v() }}">
+  <script src="/static/vw.js?v={{ asset_v() }}"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.14.1/dist/cdn.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+</head>
+<body>
+  <a href="#main" class="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 btn-primary">Skip to content</a>
+
+  {% set nav = [("/", "Dashboard", "shield"), ("/issues", "All vulns", "list"), ("/repos", "Repos", "box"), ("/routing", "Routing", "mail"),
+                ("/mails", "Mails", "mail"), ("/feeds", "Feeds", "news"), ("/runs", "Runs", "clock")] %}
+  {% set path = request.url.path %}
+  <header x-data="{ menu: false }" @keydown.escape.window="menu = false"
+          class="sticky top-0 z-40 h-14 bg-slate-950 text-white ring-1 ring-white/10">
+    <div class="mx-auto flex h-full max-w-[1400px] items-center gap-3 px-4">
+      <a href="/" class="flex min-h-[40px] shrink-0 items-center gap-2 rounded-lg font-semibold tracking-tight" aria-label="VulnWatch home">
+        <span class="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-rose-500 to-orange-400 text-white">{{ icon("shield", "w-[18px] h-[18px]") }}</span>
+        <span>VulnWatch</span><span class="hidden text-slate-400 font-normal xl:inline">{{ cfg.ORG }}</span>
+      </a>
+
+      <nav class="ml-2 hidden items-center gap-0.5 lg:flex" aria-label="Main">
+        {% for href, label, ic in nav %}
+          {% set on = path == href or (href != "/" and path.startswith(href)) %}
+          <a href="{{ href }}" {% if on %}aria-current="page"{% endif %}
+             class="relative flex min-h-[40px] items-center rounded-lg px-3 text-sm transition duration-[120ms] {{ 'bg-white/10 text-white font-medium' if on else 'text-slate-300 hover:bg-white/5 hover:text-white' }}">
+            {{ label }}
+            {% if href == "/routing" and rules_missing() %}<span class="ml-1.5 h-2 w-2 rounded-full bg-amber-400" aria-label="needs setup"></span>{% endif %}
+          </a>
+        {% endfor %}
+      </nav>
+
+      <div class="ml-auto flex items-center gap-1.5">
+        <div class="flex items-center" aria-live="polite">
+          <template x-if="$store.job.job">
+            <span class="inline-flex min-h-[40px] max-w-[16rem] items-center gap-2 truncate rounded-lg bg-blue-600 px-3 text-sm" :title="$store.job.line">
+              <svg class="h-4 w-4 shrink-0 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
+              <span class="truncate" x-text="$store.job.job"></span>
+            </span>
+          </template>
+          <template x-if="!$store.job.job">
+            <button @click="$store.job.run()" class="btn-primary hidden sm:inline-flex">{{ icon("play", "w-4 h-4") }} Run check</button>
+          </template>
+        </div>
+        <button x-data="{ t: vwTheme.get() }" @click="t = vwTheme.next()" class="btn-icon text-slate-300 hover:bg-white/10 hover:text-white"
+                :aria-label="'Theme: ' + t + '. Click to change.'" :title="'Theme: ' + t">
+          <span x-show="t === 'system'">{{ icon("monitor", "w-5 h-5") }}</span>
+          <span x-show="t === 'light'" x-cloak>{{ icon("sun", "w-5 h-5") }}</span>
+          <span x-show="t === 'dark'" x-cloak>{{ icon("moon", "w-5 h-5") }}</span>
+        </button>
+        <button @click="menu = !menu" class="btn-icon text-slate-200 hover:bg-white/10 lg:hidden" :aria-expanded="menu" aria-controls="mobile-nav" aria-label="Menu">
+          <span x-show="!menu">{{ icon("menu", "w-5 h-5") }}</span><span x-show="menu" x-cloak>{{ icon("x", "w-5 h-5") }}</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- mobile sheet -->
+    <div x-show="menu" x-cloak x-transition.opacity.duration.150ms class="fixed inset-0 top-14 z-40 bg-slate-950/60 lg:hidden" @click="menu = false"></div>
+    <nav id="mobile-nav" x-show="menu" x-cloak @click.outside="menu = false" aria-label="Main"
+         x-transition:enter="transition duration-[180ms] ease-out" x-transition:enter-start="-translate-y-2 opacity-0"
+         x-transition:leave="transition duration-[120ms]" x-transition:leave-end="-translate-y-2 opacity-0"
+         class="absolute inset-x-0 top-14 z-50 grid gap-1 border-b border-white/10 bg-slate-950 p-3 lg:hidden">
+      {% for href, label, ic in nav %}
+        {% set on = path == href or (href != "/" and path.startswith(href)) %}
+        <a href="{{ href }}" {% if on %}aria-current="page"{% endif %}
+           class="flex min-h-[48px] items-center gap-3 rounded-lg px-3 text-base {{ 'bg-white/10 text-white font-medium' if on else 'text-slate-200 hover:bg-white/5' }}">
+          {{ icon(ic, "w-5 h-5 text-slate-400") }} {{ label }}
+          {% if href == "/routing" and rules_missing() %}<span class="pill-amber ml-auto">needs setup</span>{% endif %}
+        </a>
+      {% endfor %}
+      <div class="mt-2 sm:hidden">
+        <button x-show="!$store.job.job" @click="$store.job.run(); menu = false" class="btn-primary w-full min-h-[48px]">{{ icon("play") }} Run full check</button>
+        <p x-show="$store.job.job" class="pill-blue min-h-[40px] w-full justify-center" x-text="'Running: ' + $store.job.job"></p>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main" class="mx-auto max-w-[1400px] px-4 py-6 sm:py-8">
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- toasts -->
+  <div x-data="toasts" @vw-toast.window="add($event.detail)" aria-live="polite"
+       class="pointer-events-none fixed inset-x-3 bottom-4 z-50 flex flex-col items-center gap-2 sm:inset-x-auto sm:right-4 sm:items-end">
+    <template x-for="t in items" :key="t.id">
+      <div x-transition:enter="transition duration-[180ms] ease-out" x-transition:enter-start="translate-y-3 opacity-0"
+           x-transition:leave="transition duration-[120ms]" x-transition:leave-end="opacity-0"
+           class="pointer-events-auto flex w-full max-w-sm items-center gap-3 rounded-xl bg-slate-900 px-4 py-3 text-sm text-white shadow-2xl ring-1 ring-white/10 dark:bg-slate-800">
+        <span class="h-2 w-2 shrink-0 rounded-full" :class="{ ok: 'bg-emerald-400', error: 'bg-red-400', info: 'bg-blue-400' }[t.kind]"></span>
+        <span class="flex-1" x-text="t.message"></span>
+        <button x-show="t.undo" @click="t.undo(); remove(t.id)" class="rounded px-2 py-1 font-semibold text-blue-300 hover:bg-white/10">Undo</button>
+        <button @click="remove(t.id)" class="rounded p-1 text-slate-400 hover:text-white" aria-label="Dismiss">{{ icon("x") }}</button>
+      </div>
+    </template>
+  </div>
+</body>
+</html>

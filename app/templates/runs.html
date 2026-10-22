@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, page_header %}
+{% block title %}Runs{% endblock %}
+{% block content %}
+<div x-data="runs()">
+  {% call page_header("Runs", "Every check, AI review and fix job, newest first. Times are in your timezone.") %}{% endcall %}
+
+  <div class="mb-3 flex flex-wrap items-center gap-2">
+    <div class="tabs overflow-x-auto" role="tablist" aria-label="Job type">
+      <template x-for="t in ['all', ...types]" :key="t">
+        <button role="tab" :aria-selected="type === t" @click="type = t" class="tab" x-text="t === 'all' ? 'All' : t"></button>
+      </template>
+    </div>
+    <label class="flex min-h-[40px] items-center gap-3 px-2"><input type="checkbox" class="checkbox" x-model="failedOnly"> Problems only</label>
+  </div>
+
+  <ul class="space-y-2">
+    <template x-for="r in list" :key="r.id">
+      <li class="card" x-data="{ o: false }">
+        <button @click="o = !o" :aria-expanded="o" class="flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-left">
+          <span :class="STATE[r.state][1]" class="w-24 justify-center">
+            <template x-if="r.state === 'running'"><svg class="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg></template>
+            <span x-text="STATE[r.state][0]"></span></span>
+          <span class="min-w-[10rem] flex-1">
+            <span class="font-semibold" x-text="r.job"></span>
+            <span class="block text-[13px] muted" x-text="r.summary.length ? r.summary.slice(-2).join(' · ') : (r.state === 'running' ? 'in progress…' : 'no summary')"></span>
+          </span>
+          <span class="flex flex-wrap gap-1.5">
+            <span x-show="r.counts.ready" class="pill-green" x-text="r.counts.ready + ' fix ready'"></span>
+            <span x-show="r.counts.escalated" class="pill-amber" x-text="r.counts.escalated + ' escalated'"></span>
+            <span x-show="r.counts.ERROR" class="pill-red" x-text="vw.plural(r.counts.ERROR, 'error')"></span>
+          </span>
+          <span class="w-44 text-right text-[13px] muted"><span :title="vw.local(r.started)" x-text="vw.local(r.started)"></span>
+            <span class="block" x-text="(r.state === 'running' || r.state === 'stale' ? 'running for ' : 'took ') + vw.duration(r.started, r.finished)"></span></span>
+          <span class="muted transition-transform duration-[180ms]" :class="o && 'rotate-180'">{{ icon("chevron", "w-5 h-5") }}</span>
+        </button>
+        <div x-show="o" x-collapse.duration.200ms>
+          <div class="space-y-3 border-t border-slate-200 px-4 py-3 dark:border-slate-800">
+            <div x-show="r.state === 'stale'" class="flex flex-wrap items-center gap-3 rounded-lg bg-amber-50 p-3 text-amber-900 ring-1 ring-amber-300 dark:bg-amber-500/10 dark:text-amber-200 dark:ring-amber-500/30">
+              {{ icon("alert") }} <span class="flex-1">This run never reported back. Its process probably stopped (for example the app was restarted).</span>
+              <button @click="markFailed(r)" class="btn-secondary">Mark as failed</button>
+            </div>
+            <ul x-show="r.summary.length" class="space-y-1">
+              <template x-for="s in r.summary" :key="s"><li class="flex gap-2"><span class="text-emerald-600 dark:text-emerald-400">{{ icon("check") }}</span><span x-text="s"></span></li></template>
+            </ul>
+            <details>
+              <summary class="flex min-h-[40px] cursor-pointer items-center link">View raw log</summary>
+              <pre class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-100 p-3 font-mono text-[13px] leading-6 dark:bg-slate-950" x-text="r.log || '(empty)'"></pre>
+            </details>
+          </div>
+        </div>
+      </li>
+    </template>
+    <li x-show="!list.length" class="card p-10 text-center muted">No runs match.</li>
+  </ul>
+</div>
+
+<script>
+function runs() {
+  return {
+    rows: {{ rows|tojson }}, type: "all", failedOnly: false,
+    STATE: { ok: ["OK", "pill-green"], failed: ["Failed", "pill-red"], running: ["Running", "pill-blue"], stale: ["Stalled", "pill-amber"] },
+    get types() { return [...new Set(this.rows.map(r => r.type))]; },
+    get list() { return this.rows.filter(r => (this.type === "all" || r.type === this.type) && (!this.failedOnly || ["failed", "stale"].includes(r.state) || r.counts.ERROR)); },
+    async markFailed(r) {
+      await vw.post(`/api/runs/${r.id}/fail`);
+      r.state = "failed"; r.finished = new Date().toISOString();
+      vw.toast("Run marked as failed", { kind: "ok" });
+    },
+  };
+}
+</script>
+{% endblock %}

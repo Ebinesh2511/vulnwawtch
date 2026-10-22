@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, page_header %}
+{% block title %}Feeds{% endblock %}
+{% block content %}
+<div x-data="feeds()">
+  {% call page_header("Feeds", "Advisories and security news from the last " ~ cfg.FEED_DAYS ~ " days. Turn on “Affects my repos” to see only what matters here.") %}
+    <button @click="refresh()" class="btn-secondary">Refresh feeds</button>
+  {% endcall %}
+
+  <div class="mb-3 flex flex-wrap items-center gap-2">
+    <div class="relative min-w-[12rem] flex-1">
+      <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 muted">{{ icon("search") }}</span>
+      <label for="fq" class="sr-only">Search feeds</label>
+      <input id="fq" x-model.debounce.150ms="q" @input="limit = 50" placeholder="Search title, CVE, product…" class="input pl-9">
+    </div>
+    <label class="flex min-h-[40px] cursor-pointer items-center gap-3 rounded-lg px-3 ring-1 ring-slate-300 dark:ring-slate-700" :class="mine && 'bg-blue-50 ring-blue-500 dark:bg-blue-500/10'">
+      <input type="checkbox" class="checkbox" x-model="mine" @change="limit = 50">
+      <span>Affects my repos <span class="tabular-nums muted" x-text="'(' + rows.filter(r => r.repos.length).length + ')'"></span></span>
+    </label>
+  </div>
+  <div class="mb-4 flex flex-wrap items-center gap-2" role="group" aria-label="Severity">
+    <span class="muted mr-1">Severity</span>
+    <template x-for="s in ['KEV', 'CRITICAL', 'HIGH', 'MODERATE', 'LOW']" :key="s">
+      <button @click="toggleSev(s)" :aria-pressed="sev.includes(s)" class="min-h-[40px] rounded-md px-1 transition duration-[120ms]" :class="sev.includes(s) ? 'ring-2 ring-blue-500' : 'opacity-80 hover:opacity-100'">
+        <span :class="'sev-' + s" x-text="(s === 'KEV' ? 'Exploited' : s) + ' ' + rows.filter(r => r.sev === s).length"></span></button>
+    </template>
+    <label for="fsrc" class="sr-only">Source</label>
+    <select id="fsrc" x-model="src" @change="limit = 50" class="select ml-auto"><option value="">All sources</option>
+      <template x-for="s in sources" :key="s"><option :value="s" x-text="s"></option></template></select>
+  </div>
+
+  <template x-for="g in groups" :key="g.day">
+    <section class="mb-5">
+      <h2 class="sticky top-14 z-10 -mx-4 bg-slate-50 px-4 py-2 font-semibold dark:bg-slate-950"><span x-text="g.label"></span> <span class="font-normal muted" x-text="'· ' + g.items.length"></span></h2>
+      <ul class="card divide-y divide-slate-100 dark:divide-slate-800">
+        <template x-for="f in g.items" :key="f.link + f.title">
+          <li class="grid gap-x-4 gap-y-1 px-4 py-3 sm:grid-cols-[7rem_1fr_auto]">
+            <div class="flex flex-wrap items-start gap-1.5">
+              <span x-show="f.sev" :class="'sev-' + f.sev" x-text="(f.sev === 'KEV' ? 'Exploited' : f.sev) + (f.score ? ' ' + f.score : '')"></span>
+            </div>
+            <div class="min-w-0">
+              <a :href="f.link" target="_blank" rel="noopener" class="group font-medium hover:underline" :aria-label="f.title + ' (opens in a new tab)'">
+                <span x-text="f.title"></span> <span class="inline-block align-middle opacity-0 transition group-hover:opacity-70">{{ icon("external", "w-3.5 h-3.5") }}</span></a>
+              <p x-show="f.summary && f.summary !== f.title" class="mt-0.5 line-clamp-2 muted" x-text="f.summary"></p>
+              <p class="mt-1 flex flex-wrap items-center gap-2 text-[13px] muted">
+                <span x-text="f.sources.join(', ')"></span>
+                <template x-if="f.ids.length"><span class="font-mono" :title="f.ids.join(', ')" x-text="f.ids[0] + (f.ids.length > 1 ? ' +' + (f.ids.length - 1) : '')"></span></template>
+                <template x-for="r in f.repos" :key="r"><a :href="'/?repo=' + r" class="pill-blue" x-text="'affects ' + r"></a></template>
+              </p>
+            </div>
+            <span class="whitespace-nowrap text-[13px] muted sm:text-right" :title="vw.local(f.date)" x-text="vw.ago(f.date)"></span>
+          </li>
+        </template>
+      </ul>
+    </section>
+  </template>
+  <div x-show="!filtered.length" class="card p-10 text-center muted">Nothing matches these filters.</div>
+  <div x-show="filtered.length > limit" class="text-center">
+    <button @click="limit += 50" class="btn-secondary" x-text="'Show more (' + (filtered.length - limit) + ' left)'"></button></div>
+</div>
+
+<script>
+function feeds() {
+  return {
+    rows: {{ rows|tojson }}, q: "", mine: false, sev: [], src: "", limit: 50,
+    get sources() { return [...new Set(this.rows.flatMap(r => r.sources))].sort(); },
+    toggleSev(s) { this.sev = this.sev.includes(s) ? this.sev.filter(x => x !== s) : [...this.sev, s]; this.limit = 50; },
+    get filtered() {
+      const q = this.q.toLowerCase();
+      return this.rows.filter(r => (!this.mine || r.repos.length) && (!this.sev.length || this.sev.includes(r.sev))
+        && (!this.src || r.sources.includes(this.src)) && (!q || [r.title, r.summary, ...r.ids].join(" ").toLowerCase().includes(q)));
+    },
+    get groups() {
+      const out = [], today = new Date().toDateString(), yest = new Date(Date.now() - 864e5).toDateString();
+      for (const r of this.filtered.slice(0, this.limit)) {
+        const d = r.date ? new Date(r.date) : null, day = d ? d.toDateString() : "Undated";
+        let g = out.at(-1);
+        if (!g || g.day !== day) out.push(g = { day, items: [],
+          label: day === today ? "Today" : day === yest ? "Yesterday" : (d ? d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" }) : day) });
+        g.items.push(r);
+      }
+      return out;
+    },
+    async refresh() {
+      const r = await vw.post("/api/run/feeds");
+      vw.toast(r.started ? "Fetching feeds… the page refreshes when done." : "A job is already running.", { kind: r.started ? "ok" : "info" });
+      if (r.started) window.addEventListener("vw-refresh", () => location.reload(), { once: true });
+    },
+  };
+}
+</script>
+{% endblock %}

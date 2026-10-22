@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, page_header %}
+{% block title %}{{ name }} libraries{% endblock %}
+{% block content %}
+<a href="/repos" class="link mb-3 inline-flex min-h-[40px] items-center">← Repositories</a>
+{% call page_header(name ~ " · libraries", rows|length ~ " entries from its dependency files. Direct dependencies first.") %}
+  <form class="relative"><label for="dq" class="sr-only">Filter by name</label>
+    <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 muted">{{ icon("search") }}</span>
+    <input id="dq" name="q" value="{{ q }}" placeholder="Filter by name" class="input pl-9"></form>
+{% endcall %}
+<div class="card overflow-x-auto">
+  <table class="w-full min-w-[640px] text-sm">
+    <thead class="border-b border-slate-200 text-left text-[13px] muted dark:border-slate-800">
+      <tr><th scope="col" class="px-4 py-2 font-medium">Library</th><th scope="col" class="font-medium">Version</th><th scope="col" class="font-medium">Ecosystem</th><th scope="col" class="font-medium">Type</th><th scope="col" class="px-4 font-medium">File</th></tr></thead>
+    <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+    {% for d in rows %}
+      <tr><td class="px-4 py-2 font-mono text-[13px]">{{ d.name }}</td><td class="font-mono text-[13px]">{{ d.version or "?" }}</td>
+        <td class="muted">{{ d.ecosystem }}</td>
+        <td>{% if d.direct %}<span class="pill-blue">direct</span>{% endif %} {% if d.dev %}<span class="pill-slate">dev</span>{% endif %}</td>
+        <td class="px-4 font-mono text-[13px] muted">{{ d.manifest }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

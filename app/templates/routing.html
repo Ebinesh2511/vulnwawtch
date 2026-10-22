@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, page_header %}
+{% block title %}Routing{% endblock %}
+{% block content %}
+<div x-data="routing()" x-init="init()" @keydown.escape.window="modal = false">
+  {% call page_header("Routing", "Who gets an email for which repo. One mail per library finding, never per advisory.") %}
+    <button @click="openModal()" class="btn-primary">{{ icon("plus") }} Add rule</button>
+  {% endcall %}
+
+  <div x-show="!rules.length || uncovered.length" class="mb-5 flex flex-wrap items-center gap-3 rounded-xl bg-amber-50 px-4 py-3 text-amber-900 ring-1 ring-amber-300 dark:bg-amber-500/10 dark:text-amber-200 dark:ring-amber-500/30" role="alert">
+    {{ icon("alert", "w-5 h-5") }}
+    <p class="min-w-[14rem] flex-1"><b x-text="vw.plural(uncovered.length, 'tracked repo has', 'tracked repos have') + ' no routing rule'"></b>, so nobody is emailed about their findings.
+      <span x-show="uncovered.length && uncovered.length < 6" x-text="'(' + uncovered.join(', ') + ')'"></span></p>
+    <button @click="openModal(true)" class="btn-primary">{{ icon("plus") }} Add catch-all rule</button>
+  </div>
+
+  <div class="grid gap-5 lg:grid-cols-[1fr_22rem]">
+    <section>
+      <h2 class="section-title mb-2">Rules</h2>
+      <ul class="card divide-y divide-slate-100 dark:divide-slate-800">
+        <template x-for="r in rules" :key="r.id">
+          <li class="flex flex-wrap items-start gap-x-4 gap-y-2 px-4 py-3">
+            <div class="min-w-[12rem] flex-1">
+              <div class="flex flex-wrap items-center gap-2"><span class="font-semibold" x-text="r.label || 'Untitled rule'"></span>
+                <code class="pill-slate font-mono" x-text="r.pattern"></code>
+                <span :class="r.min_severity === 'CRITICAL' ? 'pill-red' : 'pill-amber'" x-text="r.min_severity === 'CRITICAL' ? 'Critical & exploited only' : 'High and above'"></span></div>
+              <p class="mt-1 muted" x-text="'Sends to ' + r.emails.split(',').join(', ')"></p>
+              <p class="mt-0.5 text-[13px] muted" x-text="covers(r.pattern).length ? 'Covers ' + covers(r.pattern).join(', ') : 'No tracked repo matches this pattern'"></p>
+            </div>
+            <button @click="remove(r)" class="btn-ghost text-red-700 dark:text-red-300" :aria-label="'Delete rule ' + (r.label || r.pattern)">{{ icon("trash") }} Delete</button>
+          </li>
+        </template>
+        <li x-show="!rules.length" class="flex flex-col items-center gap-3 p-8 text-center">
+          <span class="grid h-12 w-12 place-items-center rounded-full bg-slate-100 muted dark:bg-slate-800">{{ icon("mail", "w-6 h-6") }}</span>
+          <p class="font-medium">No rules yet</p><p class="max-w-sm muted">Start with a catch-all rule that sends every finding to one person. Add team rules later.</p>
+          <button @click="openModal(true)" class="btn-primary">{{ icon("plus") }} Add catch-all rule</button>
+        </li>
+      </ul>
+    </section>
+
+    <section class="card h-fit space-y-3 p-4">
+      <h2 class="section-title">Mail delivery</h2>
+      <div class="flex flex-wrap gap-2">
+        <span class="{{ 'pill-green' if cfg.MAIL_MODE == 'send' else 'pill-blue' }}">{{ 'Sending' if cfg.MAIL_MODE == 'send' else 'Dry run: previews only' }}</span>
+        <span class="{{ 'pill-green' if smtp else 'pill-amber' }}">{{ 'SMTP ' ~ cfg.SMTP_HOST if smtp else 'SMTP not configured' }}</span>
+      </div>
+      <p class="muted">Guide links in mails point to <code class="font-mono">{{ cfg.DASHBOARD_URL }}</code>{% if "127.0.0.1" in cfg.DASHBOARD_URL or "localhost" in cfg.DASHBOARD_URL %}, which only opens on this machine{% endif %}.</p>
+      <details class="rounded-lg bg-slate-50 p-3 dark:bg-slate-950/60">
+        <summary class="flex min-h-[40px] cursor-pointer items-center font-medium">How to turn on email</summary>
+        <ol class="mt-2 list-decimal space-y-1 pl-5 muted">
+          <li>Fill <code class="font-mono">SMTP_HOST</code>, <code class="font-mono">SMTP_PORT</code>, <code class="font-mono">SMTP_USER</code>, <code class="font-mono">SMTP_PASS</code>, <code class="font-mono">SMTP_FROM</code> in <code class="font-mono">vulnwatch/.env</code>.</li>
+          <li>Restart the app and send a test mail below.</li>
+          <li>Check the previews on the Mails page, then set <code class="font-mono">MAIL_MODE=send</code> and restart.</li>
+        </ol>
+      </details>
+      {% if smtp %}
+      <form @submit.prevent="test()" class="flex gap-2">
+        <label for="tto" class="sr-only">Send a test mail to</label>
+        <input id="tto" x-model="testTo" type="email" required placeholder="e.g. you@guvi.in" class="input flex-1">
+        <button class="btn-secondary">Send test</button>
+      </form>
+      {% endif %}
+    </section>
+  </div>
+
+  <!-- add rule dialog -->
+  <div x-show="modal" x-cloak x-transition.opacity.duration.150ms class="fixed inset-0 z-40 bg-slate-950/50" @click="modal = false"></div>
+  <div x-show="modal" x-cloak role="dialog" aria-modal="true" aria-labelledby="mtitle"
+       x-transition:enter="transition duration-[180ms] ease-out" x-transition:enter-start="opacity-0 translate-y-2 scale-[.98]"
+       x-transition:leave="transition duration-[120ms]" x-transition:leave-end="opacity-0"
+       class="fixed inset-x-3 top-[8vh] z-50 mx-auto max-w-lg">
+    <form @submit.prevent="add()" class="card space-y-4 p-5 shadow-2xl">
+      <div class="flex items-center"><h2 id="mtitle" class="section-title" x-text="form.pattern === '*' ? 'Add catch-all rule' : 'Add rule'"></h2>
+        <button type="button" @click="modal = false" class="btn-icon btn-ghost ml-auto" aria-label="Close">{{ icon("x", "w-5 h-5") }}</button></div>
+      <div><label class="label" for="fl">Team or label</label>
+        <input id="fl" x-model="form.label" placeholder="e.g. Placement team" class="input"></div>
+      <div><label class="label" for="fp">Repo pattern <span class="text-red-700 dark:text-red-300">*</span></label>
+        <input id="fp" x-model="form.pattern" x-ref="pattern" required placeholder="e.g. placement-*" class="input font-mono" aria-describedby="fp-help">
+        <p id="fp-help" class="mt-1 text-[13px] muted" x-text="form.pattern ? (covers(form.pattern).length ? 'Matches ' + vw.plural(covers(form.pattern).length, 'repo') + ': ' + covers(form.pattern).join(', ') : 'Matches no tracked repo yet') : 'Use * as a wildcard. * alone means every repo.'"></p></div>
+      <div><label class="label" for="fe">Team lead emails <span class="text-red-700 dark:text-red-300">*</span></label>
+        <textarea id="fe" x-model="form.emails" required rows="2" placeholder="e.g. lead@guvi.in, dev@guvi.in" class="input py-2" aria-describedby="fe-help"></textarea>
+        <p id="fe-help" class="mt-1 text-[13px]" :class="badEmails.length ? 'text-red-700 dark:text-red-300' : 'muted'"
+           x-text="badEmails.length ? 'Not a valid email: ' + badEmails.join(', ') : 'Separate several addresses with commas.'"></p></div>
+      <div><label class="label" for="fs">Send when</label>
+        <select id="fs" x-model="form.min_severity" class="select w-full">
+          <option value="HIGH">High, critical or exploited</option><option value="CRITICAL">Only critical or exploited</option></select></div>
+      <p x-show="error" class="text-red-700 dark:text-red-300" x-text="error"></p>
+      <div class="flex justify-end gap-2"><button type="button" @click="modal = false" class="btn-ghost">Cancel</button>
+        <button class="btn-primary" :disabled="!form.pattern || !goodEmails.length || badEmails.length">Add rule</button></div>
+    </form>
+  </div>
+</div>
+
+<script>
+function routing() {
+  return {
+    rules: {{ rules|tojson }}, repos: {{ repos|tojson }}, modal: false, error: "", testTo: "",
+    form: { label: "", pattern: "", emails: "", min_severity: "HIGH" },
+    init() { if (new URLSearchParams(location.search).get("add") === "catchall") this.openModal(true); },
+    glob(p) { return new RegExp("^" + p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$"); },
+    covers(p) { try { const rx = this.glob(p.trim()); return this.repos.filter(r => rx.test(r)); } catch (e) { return []; } },
+    get uncovered() { return this.repos.filter(r => !this.rules.some(x => this.covers(x.pattern).includes(r))); },
+    get parts() { return this.form.emails.split(/[,\s;]+/).map(s => s.trim()).filter(Boolean); },
+    get goodEmails() { return this.parts.filter(e => /^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$/.test(e)); },
+    get badEmails() { return this.parts.filter(e => !/^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$/.test(e)); },
+    openModal(catchAll) {
+      this.form = { label: catchAll ? "Everyone" : "", pattern: catchAll ? "*" : "", emails: "", min_severity: "HIGH" };
+      this.error = ""; this.modal = true;
+      this.$nextTick(() => document.getElementById(catchAll ? "fe" : "fl").focus());
+    },
+    async add() {
+      const r = await fetch("/api/rules", { method: "POST", body: new URLSearchParams(this.form) });
+      const d = await r.json();
+      if (!r.ok) { this.error = d.error; return; }
+      this.rules.push(d.rule); this.modal = false;
+      vw.toast(`Rule added: ${d.rule.label || d.rule.pattern}`, { kind: "ok" });
+    },
+    async remove(rule) {
+      if (!confirm(`Delete the rule "${rule.label || rule.pattern}"? Its repos stop getting mail.`)) return;
+      await vw.post(`/api/rules/${rule.id}/delete`);
+      this.rules = this.rules.filter(r => r.id !== rule.id);
+      vw.toast("Rule deleted", { kind: "ok" });
+    },
+    async test() {
+      const d = await vw.post("/api/mail/test", { to: this.testTo });
+      vw.toast(d.message, { kind: d.ok ? "ok" : "error", timeout: 6000 });
+    },
+  };
+}
+</script>
+{% endblock %}

@@ -1,0 +1,99 @@
+{% from "_ui.html" import icon %}{# Finding detail. Expects Alpine `f` plus the vwFinding() helpers in scope. #}
+<div class="space-y-5" x-init="loadGuide(f)">
+  <p class="max-w-prose text-base leading-relaxed text-slate-800 dark:text-slate-200" x-text="f.impact || f.problem"></p>
+
+  <div class="grid gap-3 md:grid-cols-3">
+    <div class="card p-4">
+      <h4 class="text-xs font-semibold uppercase tracking-wide muted">Problem</h4>
+      <p class="mt-1.5" x-text="f.problem"></p>
+    </div>
+    <div class="card p-4">
+      <h4 class="text-xs font-semibold uppercase tracking-wide muted">Guard now</h4>
+      <p class="mt-1.5" x-text="f.guard || 'No workaround listed.'"></p>
+    </div>
+    <div class="rounded-xl bg-emerald-50 p-4 ring-1 ring-emerald-600/20 dark:bg-emerald-500/10 dark:ring-emerald-500/30">
+      <h4 class="text-xs font-semibold uppercase tracking-wide text-emerald-800 dark:text-emerald-300">Fix</h4>
+      <p class="mt-1.5 font-medium text-emerald-900 dark:text-emerald-100" x-text="f.fix || (f.target ? 'Upgrade to ' + f.target : 'No fixed version yet.')"></p>
+    </div>
+  </div>
+
+  <div>
+    <h4 class="mb-2 font-semibold">Attack types</h4>
+    <div class="flex flex-wrap gap-2">
+      <template x-for="[c, n] in f.categories" :key="c">
+        <span class="pill-slate"><span class="h-2 w-2 rounded-full" :class="RANK[c] === 1 ? 'bg-red-500' : (RANK[c] === 2 ? 'bg-orange-500' : 'bg-slate-400')"></span>
+          <span x-text="C[c] + (n > 1 ? ' ×' + n : '')"></span></span>
+      </template>
+    </div>
+  </div>
+
+  <!-- auto-fix -->
+  <section class="rounded-xl p-4 ring-1" :class="!f.autofix ? 'ring-slate-200 dark:ring-slate-800' : (f.autofix.status === 'escalated' ? 'bg-amber-50/60 ring-amber-600/20 dark:bg-amber-500/5 dark:ring-amber-500/30' : 'bg-emerald-50/60 ring-emerald-600/20 dark:bg-emerald-500/5 dark:ring-emerald-500/30')">
+    <div class="flex flex-wrap items-center gap-2">
+      {{ icon("bot", "w-5 h-5 muted") }}
+      <h4 class="font-semibold">Auto-fix</h4>
+      <template x-if="f.autofix"><span :class="FIX[f.autofix.status].pill" x-text="FIX[f.autofix.status].label"></span></template>
+      <span class="pill-slate" x-text="(autofixMode || 'dry_run').replace('_', ' ')"></span>
+      <button x-show="autofixMode !== 'off'" @click="fixNow(f)" :disabled="busy[f.id]" class="btn-secondary ml-auto">
+        <span x-text="busy[f.id] ? 'Working…' : (f.autofix ? 'Retry fix' : 'Prepare fix')"></span></button>
+    </div>
+    <p x-show="!f.autofix" class="mt-2 muted">Not tried yet. Runs automatically for confirmed findings on the next check.</p>
+    <template x-if="f.autofix">
+      <div class="mt-3 space-y-2">
+        <p x-show="f.autofix.reason"><b x-text="f.autofix.status === 'escalated' ? 'Why a developer is needed: ' : 'Note: '"></b><span x-text="f.autofix.reason"></span></p>
+        <p x-show="f.autofix.branch" class="muted">Branch <code class="font-mono" x-text="f.autofix.branch"></code> · <span x-text="files(f.autofix).join(', ')"></span></p>
+        <p x-show="f.autofix.pr_url"><a :href="f.autofix.pr_url" target="_blank" rel="noopener" class="link inline-flex items-center gap-1">{{ icon("pr") }} Open the pull request {{ icon("external", "w-3.5 h-3.5") }}</a></p>
+        <p x-show="f.autofix.status === 'ready'" class="muted">Dry run: nothing was pushed. Set <code class="font-mono">AUTOFIX_MODE=pr</code> to open PRs.</p>
+        <details x-show="f.autofix.diff" class="overflow-hidden rounded-lg bg-[#0d1117] ring-1 ring-slate-800">
+          <summary class="flex min-h-[40px] cursor-pointer items-center bg-[#161b22] px-3 font-mono text-[13px] text-slate-200">View diff (lockfile changes summarised)</summary>
+          <div class="max-h-96 overflow-auto py-1.5 font-mono text-[13px] leading-6">
+            <template x-for="(l, n) in (f.autofix.diff || '').split('\n')" :key="n">
+              <div class="whitespace-pre px-3" :class="l.startsWith('+') && !l.startsWith('+++') ? 'bg-emerald-500/15 text-emerald-200' : (l.startsWith('-') && !l.startsWith('---') ? 'bg-red-500/15 text-red-200' : (l.startsWith('@@') ? 'text-sky-300' : 'text-slate-400'))" x-text="l || ' '"></div>
+            </template>
+          </div>
+        </details>
+      </div>
+    </template>
+  </section>
+
+  <div x-show="f.evidence.length">
+    <h4 class="mb-2 font-semibold">Where it is in the code</h4>
+    <div class="grid gap-2 lg:grid-cols-2">
+      <template x-for="ev in f.evidence" :key="ev.url">{% include "_snippet.html" %}</template>
+    </div>
+  </div>
+
+  <div>
+    <h4 class="mb-2 font-semibold">Advisories <span class="font-normal muted" x-text="'(' + f.vuln_count + ')'"></span></h4>
+    <ul class="divide-y divide-slate-200 overflow-hidden rounded-xl ring-1 ring-slate-200 dark:divide-slate-800 dark:ring-slate-800 max-h-80 overflow-y-auto">
+      <template x-for="v in f.vulns" :key="v.id">
+        <li class="grid gap-x-4 gap-y-1 bg-white px-4 py-3 dark:bg-slate-900 sm:grid-cols-[minmax(0,14rem)_1fr]">
+          <div class="flex flex-wrap items-center gap-2">
+            <span :class="sevClass(v.severity)" x-text="v.severity"></span>
+            <a class="link font-mono text-[13px]" :href="'https://osv.dev/vulnerability/' + v.id" target="_blank" rel="noopener" :aria-label="v.id + ' on osv.dev (opens in a new tab)'" x-text="v.id"></a>
+            <span x-show="v.kev" class="text-red-600 dark:text-red-400" title="Exploited in the wild (CISA KEV)">{{ icon("flame", "w-4 h-4", "Exploited in the wild") }}</span>
+          </div>
+          <div class="min-w-0">
+            <p class="line-clamp-2" :title="v.summary" x-text="v.summary"></p>
+            <p class="mt-0.5 text-[13px] muted"><span x-text="C[v.category] || 'Other'"></span>
+              <span x-show="v.fixed.length"> · fixed in <span class="font-mono text-emerald-700 dark:text-emerald-300" x-text="v.fixed.join(', ')"></span></span>
+              <span x-show="v.aliases.length" x-text="' · ' + v.aliases.join(', ')"></span></p>
+          </div>
+        </li>
+      </template>
+    </ul>
+  </div>
+
+  <div x-show="f.has_guide">
+    <h4 class="mb-2 font-semibold">Step-by-step fix guide</h4>
+    <article class="prose card max-w-none p-5" x-html="guides[f.id] || '<div class=&quot;skeleton h-4 w-2/3 mb-2&quot;></div><div class=&quot;skeleton h-4 w-1/2&quot;></div>'"></article>
+  </div>
+
+  <div class="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-4 dark:border-slate-800">
+    <span class="muted mr-1">Mark as</span>
+    <template x-for="s in [['in_progress', 'In progress'], ['fixed', 'Fixed'], ['ignored', 'Ignored'], ['open', 'Open']]" :key="s[0]">
+      <button x-show="f.status !== s[0]" @click="setStatus(f, s[0], s[1])" class="btn-secondary" x-text="s[1]"></button>
+    </template>
+    <a :href="'https://github.com/{{ cfg.ORG }}/' + f.repo" target="_blank" rel="noopener" class="btn-ghost ml-auto">{{ icon("github") }} <span x-text="f.repo"></span> {{ icon("external", "w-3.5 h-3.5") }}</a>
+  </div>
+</div>

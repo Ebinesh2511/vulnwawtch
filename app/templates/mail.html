@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, page_header %}
+{% block title %}Mail{% endblock %}
+{% block content %}
+<a href="/mails" class="link mb-3 inline-flex min-h-[40px] items-center">← All mails</a>
+<div x-data="{ async send() { if (!confirm('Send this mail to {{ m.recipient }} now?')) return; const r = await vw.post('/api/mails/{{ m.id }}/send'); vw.toast(r.ok ? 'Mail sent' : 'Sending failed, see the error on this page', { kind: r.ok ? 'ok' : 'error' }); setTimeout(() => location.reload(), 800); } }">
+  {% call page_header(m.subject, "To " ~ m.recipient ~ " · from " ~ (cfg.SMTP_FROM or "(SMTP_FROM not set)")) %}
+    <span class="{{ {'sent': 'pill-green', 'error': 'pill-red'}.get(m.status, 'pill-slate') }}">{{ {'sent': 'Sent', 'error': 'Failed', 'preview': 'Preview'}.get(m.status, m.status) }}</span>
+    <a href="/issues/{{ m.issue_id }}" class="btn-secondary">Open finding</a>
+    {% if smtp and m.status != "sent" %}<button @click="send()" class="btn-primary">{{ icon("mail") }} Send now</button>{% endif %}
+  {% endcall %}
+  {% if m.error %}<p class="mb-4 rounded-lg bg-red-50 p-3 text-red-800 ring-1 ring-red-600/20 dark:bg-red-500/10 dark:text-red-200">{{ m.error }}</p>{% endif %}
+  <div class="grid gap-5 lg:grid-cols-2">
+    <section class="card p-2"><h2 class="px-2 pb-1 pt-1 font-semibold">HTML version</h2>
+      <iframe sandbox srcdoc="{{ m.html }}" title="Mail preview" class="h-[560px] w-full rounded-lg bg-white"></iframe></section>
+    <section class="card p-4"><h2 class="pb-2 font-semibold">Plain-text version</h2>
+      <pre class="whitespace-pre-wrap font-mono text-[13px] leading-6">{{ m.body }}</pre></section>
+  </div>
+</div>
+{% endblock %}

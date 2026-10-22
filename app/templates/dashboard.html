@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, page_header %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div x-data="dash()" x-init="init()" @vw-refresh.window="load(true)">
+
+  {% call page_header("Vulnerabilities", "Version-matched via OSV.dev, verified against the code by AI.",
+                      info="A finding is confirmed when an advisory matches the exact installed version AND the AI review of your code says it is affected or possibly affected. Click any code line to open it on GitHub.") %}
+    <span class="inline-flex items-center gap-2 muted" aria-live="polite">
+      <span class="relative flex h-2 w-2"><span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75 motion-reduce:hidden"></span><span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span></span>
+      <span x-text="'Live · updated ' + ago"></span>
+    </span>
+  {% endcall %}
+
+  <!-- KPI row -->
+  <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
+    <div class="card col-span-2 flex items-center gap-4 p-4 sm:col-span-3 md:col-span-1 md:block">
+      <template x-if="!loaded"><div class="skeleton h-10 w-16"></div></template>
+      <div x-show="loaded" class="text-[40px] font-bold leading-none tabular-nums" x-text="confirmed.length"></div>
+      <div class="md:mt-2"><div class="font-medium">confirmed findings</div>
+        <div class="muted" x-text="vw.plural(new Set(confirmed.map(f => f.repo)).size, 'repo') + ' · ' + data.libraries + ' libraries scanned'"></div></div>
+    </div>
+    <template x-for="p in [0, 1, 2, 3]" :key="p">
+      <button @click="togglePrio(p)" :aria-pressed="prio.includes(p)" class="card p-4 text-left transition duration-[120ms] hover:-translate-y-0.5 hover:shadow-md"
+              :class="prio.includes(p) && ('ring-2 ' + PRIO[p].ring)">
+        <div class="flex items-center gap-2 text-sm font-semibold" :class="PRIO[p].text"><span class="h-2.5 w-2.5 rounded-full" :class="PRIO[p].dot"></span><span x-text="P[p].code + ' · ' + P[p].label"></span></div>
+        <div class="mt-1 text-3xl font-bold tabular-nums" x-text="confirmed.filter(f => f.priority === p).length"></div>
+        <div class="hidden text-[13px] muted leading-snug xl:block" x-text="P[p].hint"></div>
+      </button>
+    </template>
+    <button @click="kevOnly = !kevOnly" :aria-pressed="kevOnly" class="card col-span-2 p-4 text-left sm:col-span-1 transition duration-[120ms] hover:-translate-y-0.5 hover:shadow-md"
+            :class="kevOnly && 'ring-2 ring-red-500'">
+      <div class="flex items-center gap-2 text-sm font-semibold text-red-700 dark:text-red-300">{{ icon("flame") }} Exploited</div>
+      <div class="mt-1 text-3xl font-bold tabular-nums" x-text="confirmed.filter(f => f.kev).length"></div>
+      <div class="hidden text-[13px] muted leading-snug xl:block">On the CISA KEV list</div>
+    </button>
+  </div>
+
+  <!-- analytics strip -->
+  <div class="mt-3 grid gap-3 md:grid-cols-2">
+    <template x-for="chart in [{ key: 'category', title: 'By attack type', set: v => cat = (cat === v ? '' : v), cur: () => cat, label: k => C[k] || 'Other', bar: 'bg-rose-500 dark:bg-rose-400' },
+                               { key: 'repo', title: 'By repository', set: v => repo = (repo === v ? '' : v), cur: () => repo, label: k => k, bar: 'bg-slate-600 dark:bg-slate-300' }]" :key="chart.key">
+      <section class="card p-4" x-data="{ all: false }">
+        <div class="mb-2 flex items-baseline justify-between"><h2 class="font-semibold" x-text="chart.title"></h2><span class="text-[13px] muted">click a bar to filter</span></div>
+        <div class="space-y-1">
+          <template x-for="row in bars(chart.key, chart.label).slice(0, all ? 99 : 5)" :key="row.k">
+            <button @click="chart.set(row.k)" class="group grid min-h-[40px] w-full grid-cols-[minmax(0,11rem)_1fr_2rem] items-center gap-3 rounded-md px-1 text-left hover:bg-slate-100 dark:hover:bg-slate-800"
+                    :aria-pressed="chart.cur() === row.k" :aria-label="row.label + ': ' + row.n">
+              <span class="truncate" :class="chart.cur() === row.k && 'font-semibold text-blue-700 dark:text-blue-300'" x-text="row.label"></span>
+              <span class="h-2 rounded-full bg-slate-100 dark:bg-slate-800"><span class="block h-2 rounded-full transition-all duration-[240ms] ease-out" :class="chart.bar" :style="`width:${row.pct}%`"></span></span>
+              <span class="text-right tabular-nums muted" x-text="row.n"></span>
+            </button>
+          </template>
+        </div>
+        <button x-show="bars(chart.key, chart.label).length > 5" @click="all = !all" class="link mt-1 min-h-[40px] text-[13px]"
+                x-text="all ? 'Show top 5' : '+' + (bars(chart.key, chart.label).length - 5) + ' more'"></button>
+      </section>
+    </template>
+  </div>
+
+  <!-- filter bar: one row, sticky under the header -->
+  <div class="sticky top-14 z-30 -mx-4 mt-5 flex items-center gap-2 border-b border-slate-200 bg-slate-50/95 px-4 py-2.5 dark:border-slate-800 dark:bg-slate-950/95">
+    <div class="tabs hidden xl:flex" role="tablist" aria-label="Which findings">
+      <template x-for="v in VIEWS" :key="v.id">
+        <button role="tab" :aria-selected="view === v.id" @click="setView(v.id)" class="tab">
+          <span x-text="v.label"></span> <span class="tabular-nums opacity-70" x-text="inView(v.id).length"></span></button>
+      </template>
+    </div>
+    <label class="sr-only" for="viewsel">Which findings</label>
+    <select id="viewsel" x-model="view" @change="setView(view)" class="select xl:hidden">
+      <template x-for="v in VIEWS" :key="v.id"><option :value="v.id" x-text="v.label + ' (' + inView(v.id).length + ')'"></option></template>
+    </select>
+    <div class="relative min-w-0 flex-1">
+      <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 muted">{{ icon("search") }}</span>
+      <label class="sr-only" for="q">Search findings</label>
+      <input id="q" x-model.debounce.150ms="q" placeholder="Search library, repo, CVE…" class="input pl-9">
+    </div>
+    <div class="relative" x-data="{ o: false }" @keydown.escape="o = false">
+      <button @click="o = !o" :aria-expanded="o" class="btn-secondary" aria-label="Filters">{{ icon("sliders") }}
+        <span class="hidden sm:inline">Filters</span><span x-show="filterCount" class="pill-blue px-1.5" x-text="filterCount"></span></button>
+      <div x-show="o" x-cloak x-transition.opacity.duration.150ms @click.outside="o = false"
+           class="card absolute right-0 top-12 z-40 w-[min(20rem,calc(100vw-2rem))] space-y-3 p-4 shadow-xl">
+        <div><label class="label" for="frepo">Repository</label>
+          <select id="frepo" x-model="repo" class="select w-full"><option value="">All repos</option>
+            <template x-for="r in repos" :key="r"><option :value="r" x-text="r"></option></template></select></div>
+        <div><label class="label" for="fcat">Attack type</label>
+          <select id="fcat" x-model="cat" class="select w-full"><option value="">All attack types</option>
+            <template x-for="(label, k) in C" :key="k"><option :value="k" x-text="label"></option></template></select></div>
+        <label class="flex min-h-[40px] items-center gap-3"><input type="checkbox" class="checkbox" x-model="showDev"> Include dev-only libraries</label>
+        <label class="flex min-h-[40px] items-center gap-3"><input type="checkbox" class="checkbox" x-model="kevOnly"> Exploited in the wild only</label>
+        <button x-show="filterCount" @click="clearFilters()" class="btn-ghost w-full">Clear all filters</button>
+      </div>
+    </div>
+    <button @click="comfy = !comfy" class="btn-icon btn-secondary" :aria-pressed="comfy" :aria-label="comfy ? 'Switch to compact rows' : 'Switch to comfortable rows'" :title="comfy ? 'Compact rows' : 'Comfortable rows'">
+      <span x-show="!comfy">{{ icon("rows") }}</span><span x-show="comfy" x-cloak>{{ icon("list") }}</span></button>
+  </div>
+
+  <!-- new findings arrived while reading -->
+  <div x-show="pending" x-cloak x-transition class="sticky top-[132px] z-20 mt-3 flex justify-center">
+    <button @click="applyPending()" class="btn-primary shadow-lg" x-text="vw.plural(pendingNew, 'new finding') + ' · show'"></button>
+  </div>
+
+  <p class="sr-only" aria-live="polite" x-text="shown.length + ' findings shown'"></p>
+
+  <!-- lanes -->
+  <div class="fade-list mt-4 space-y-8" :class="fading && 'fading'">
+    <template x-if="!loaded">
+      <div class="space-y-2"><template x-for="i in 5"><div class="card flex items-center gap-3 p-4"><div class="skeleton h-5 w-40"></div><div class="skeleton h-5 w-24"></div><div class="skeleton ml-auto h-5 w-16"></div></div></template></div>
+    </template>
+    <template x-for="p in [0, 1, 2, 3]" :key="p">
+      <section x-show="lane(p).length" :aria-labelledby="'lane' + p">
+        <div class="sticky top-[117px] z-10 -mx-4 mb-2 flex items-center gap-3 bg-slate-50/95 px-4 py-2 dark:bg-slate-950/95">
+          <span class="h-3 w-3 rounded-full" :class="PRIO[p].dot"></span>
+          <h2 :id="'lane' + p" class="section-title"><span x-text="P[p].code + ' · ' + P[p].label"></span></h2>
+          <span class="hidden muted sm:inline" x-text="P[p].hint"></span>
+          <span class="ml-auto muted tabular-nums" x-text="vw.plural(lane(p).length, 'finding')"></span>
+        </div>
+        <div class="space-y-2">
+          <template x-for="f in lane(p)" :key="f.id">
+            <article :id="'f' + f.id" class="card scroll-target relative overflow-hidden transition-shadow duration-[180ms]"
+                     :class="[open[f.id] && 'ring-2 !ring-blue-500/60 shadow-lg', arrived === f.id && 'arrive']">
+              <span class="absolute inset-y-0 left-0 w-1" :class="PRIO[f.priority].bar" aria-hidden="true"></span>
+              <button @click="toggle(f)" :aria-expanded="!!open[f.id]" :aria-controls="'d' + f.id"
+                      class="flex w-full items-center gap-3 py-3 pl-5 pr-3 text-left transition duration-[120ms] hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                    <span class="font-mono text-base font-semibold" x-text="f.package"></span>
+                    <span class="font-mono muted" x-text="f.version"></span>
+                    <span x-show="f.target" class="font-mono font-medium text-emerald-700 dark:text-emerald-300" x-text="'→ ' + f.target"></span>
+                    <span x-show="f.kev" class="self-center text-red-600 dark:text-red-400" title="Exploited in the wild (CISA KEV)">{{ icon("flame", "w-4 h-4", "Exploited in the wild") }}</span>
+                    <span x-show="f.dev_only" class="pill-slate self-center" title="Only in development / build tooling, not shipped">dev only</span>
+                  </div>
+                  <div class="mt-0.5 flex flex-wrap items-center gap-x-2 muted">
+                    <span class="font-medium text-slate-700 dark:text-slate-300" x-text="f.repo"></span><span aria-hidden="true">·</span>
+                    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full" :class="RANK[f.category] === 1 ? 'bg-red-500' : (RANK[f.category] === 2 ? 'bg-orange-500' : 'bg-slate-400')"></span><span x-text="C[f.category]"></span></span>
+                    <span aria-hidden="true">·</span><span x-text="vw.plural(f.vuln_count, 'advisory', 'advisories')"></span>
+                  </div>
+                </div>
+                <div class="hidden shrink-0 items-center gap-2 sm:flex">
+                  <span :class="sevClass(f.severity)" x-text="f.severity"></span>
+                  <template x-if="f.affected"><span :class="VERDICT[f.affected][1]" x-text="VERDICT[f.affected][0]"></span></template>
+                  <template x-if="!f.affected"><span class="pill-slate" x-text="f.backlog ? 'Backlog' : 'Awaiting AI'"></span></template>
+                  <template x-if="f.autofix"><span :class="FIX[f.autofix.status].pill" x-text="FIX[f.autofix.status].label"></span></template>
+                </div>
+                <span class="grid h-8 w-8 shrink-0 place-items-center rounded-md muted transition-transform duration-[180ms]" :class="open[f.id] && 'rotate-180'">{{ icon("chevron", "w-5 h-5") }}</span>
+              </button>
+              <!-- small screens: badges under the header -->
+              <div class="flex flex-wrap gap-2 px-5 pb-3 sm:hidden">
+                <span :class="sevClass(f.severity)" x-text="f.severity"></span>
+                <template x-if="f.affected"><span :class="VERDICT[f.affected][1]" x-text="VERDICT[f.affected][0]"></span></template>
+                <template x-if="f.autofix"><span :class="FIX[f.autofix.status].pill" x-text="FIX[f.autofix.status].label"></span></template>
+              </div>
+              <!-- comfortable density: impact + first code line without expanding -->
+              <div x-show="comfy && !open[f.id]" class="space-y-2 px-5 pb-4">
+                <p class="max-w-prose" x-text="f.impact || f.problem"></p>
+                <template x-for="ev in f.evidence.slice(0, 1)" :key="ev.url">{% include "_snippet.html" %}</template>
+              </div>
+              <div :id="'d' + f.id" x-show="open[f.id]" x-collapse.duration.200ms>
+                <template x-if="open[f.id]"><div class="border-t border-slate-200 bg-slate-50/60 px-5 py-5 dark:border-slate-800 dark:bg-slate-950/40">{% include "_finding_detail.html" %}</div></template>
+              </div>
+            </article>
+          </template>
+        </div>
+      </section>
+    </template>
+
+    <div x-show="loaded && !shown.length" class="card flex flex-col items-center gap-3 p-10 text-center">
+      <span class="grid h-12 w-12 place-items-center rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">{{ icon("check", "w-6 h-6") }}</span>
+      <p class="font-medium" x-text="view === 'confirmed' && !filterCount && !q ? 'No confirmed issues right now.' : 'Nothing matches these filters.'"></p>
+      <button x-show="filterCount || q" @click="clearFilters()" class="btn-secondary">Clear filters</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function dash() {
+  return {
+    ...vwFinding(),
+    data: { findings: [], repos: 0, libraries: 0 }, loaded: false, loadedAt: 0, ago: "now",
+    view: "confirmed", q: "", repo: "", cat: "", prio: [], kevOnly: false, showDev: true,
+    comfy: false, open: {}, arrived: null, fading: false, pending: null, pendingNew: 0,
+    C: {{ cats|tojson }}, RANK: {{ ranks|tojson }}, P: {{ prios|tojson }},
+    VIEWS: [
+      { id: "confirmed", label: "Confirmed" }, { id: "pending", label: "Awaiting AI" }, { id: "backlog", label: "Backlog" },
+      { id: "not_affected", label: "Not reachable" }, { id: "closed", label: "Fixed / ignored" },
+    ],
+    get autofixMode() { return this.data.autofix_mode; },
+
+    async init() {
+      try { this.comfy = localStorage.getItem("vw-density") === "comfy"; } catch (e) {}
+      this.$watch("comfy", v => { try { localStorage.setItem("vw-density", v ? "comfy" : "compact"); } catch (e) {} });
+      ["q", "repo", "cat", "prio", "kevOnly", "showDev"].forEach(k => this.$watch(k, () => this.blink()));
+      const qs = new URLSearchParams(location.search);
+      await this.load(true);
+      this.repo = qs.get("repo") || "";
+      const id = +qs.get("open");
+      if (id) this.goTo(id);
+      setInterval(() => this.load(), 10000);
+      setInterval(() => { this.ago = vw.ago(new Date(this.loadedAt).toISOString()); }, 5000);
+    },
+    async load(force) {
+      try {
+        const d = await (await fetch("/api/findings")).json();
+        const have = new Set(this.data.findings.map(f => f.id));
+        const fresh = d.findings.filter(f => !have.has(f.id) && this.viewOf(f) === "confirmed").length;
+        if (!force && this.loaded && fresh) { this.pending = d; this.pendingNew = fresh; return; }
+        this.data = d; this.loaded = true; this.loadedAt = Date.now(); this.ago = "just now";
+      } catch (e) {}
+    },
+    applyPending() { this.data = this.pending; this.pending = null; this.loadedAt = Date.now(); window.scrollTo({ top: 0, behavior: "smooth" }); },
+    goTo(id) {
+      const f = this.data.findings.find(f => f.ids.includes(id));
+      if (!f) return;
+      this.view = this.viewOf(f); this.open[f.id] = true;
+      this.$nextTick(() => setTimeout(() => {
+        document.getElementById("f" + f.id)?.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+        this.arrived = f.id; setTimeout(() => this.arrived = null, 2600);
+      }, 80));
+    },
+    blink() { this.fading = true; setTimeout(() => this.fading = false, 120); },
+    setView(v) { this.view = v; this.blink(); },
+
+    viewOf(f) {
+      if (["fixed", "ignored"].includes(f.status)) return "closed";
+      if (f.status === "not_affected" || f.affected === "no") return "not_affected";
+      if (f.confirmed) return "confirmed";
+      return f.backlog ? "backlog" : "pending";
+    },
+    inView(v) { return this.data.findings.filter(f => this.viewOf(f) === v); },
+    get confirmed() { return this.inView("confirmed"); },
+    get repos() { return [...new Set(this.data.findings.map(f => f.repo))].sort(); },
+    get filterCount() { return [this.repo, this.cat, this.kevOnly, !this.showDev, this.prio.length].filter(Boolean).length; },
+    match(f, skip) {
+      if (skip !== "repo" && this.repo && f.repo !== this.repo) return false;
+      if (skip !== "category" && this.cat && !f.categories.some(([c]) => c === this.cat)) return false;
+      if (this.prio.length && !this.prio.includes(f.priority)) return false;
+      if (this.kevOnly && !f.kev) return false;
+      if (!this.showDev && f.dev_only) return false;
+      if (this.q) {
+        const hay = [f.package, f.repo, f.version, f.problem, f.impact, ...f.vulns.flatMap(v => [v.id, ...v.aliases])].join(" ").toLowerCase();
+        if (!this.q.toLowerCase().split(/\s+/).every(w => hay.includes(w))) return false;
+      }
+      return true;
+    },
+    get shown() { return this.inView(this.view).filter(f => this.match(f)); },
+    lane(p) { return this.shown.filter(f => f.priority === p); },
+    bars(key, label) {
+      // counts under every filter except the chart's own, so the chosen bar keeps its siblings visible
+      const counts = {};
+      this.inView(this.view).filter(f => this.match(f, key)).forEach(f => { counts[f[key]] = (counts[f[key]] || 0) + 1; });
+      const rows = Object.entries(counts).map(([k, n]) => ({ k, n, label: label(k) })).sort((a, b) => b.n - a.n);
+      const max = Math.max(1, ...rows.map(r => r.n));
+      return rows.map(r => ({ ...r, pct: Math.max(4, r.n / max * 100) }));
+    },
+    togglePrio(p) { this.prio = this.prio.includes(p) ? this.prio.filter(x => x !== p) : [...this.prio, p]; },
+    clearFilters() { this.q = ""; this.repo = ""; this.cat = ""; this.prio = []; this.kevOnly = false; this.showDev = true; },
+    toggle(f) { this.open[f.id] = !this.open[f.id]; },
+  };
+}
+</script>
+{% endblock %}

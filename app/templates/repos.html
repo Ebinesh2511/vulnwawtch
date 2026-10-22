@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, page_header %}
+{% block title %}Repos{% endblock %}
+{% block content %}
+<div x-data="repos()">
+  {% call page_header("Repositories", "Only tracked repos are scanned, analysed, shown and mailed about. Untrack the ones nobody uses.") %}
+    <button @click="job('repos', 'Syncing the repo list and scanning changed repos…')" class="btn-secondary">Sync + scan changed</button>
+    <button @click="job('rescan', 'Rescanning every tracked repo…')" class="btn-ghost">Force rescan</button>
+  {% endcall %}
+
+  <div class="mb-4 grid grid-cols-3 gap-3 sm:max-w-xl">
+    <button @click="show = 'tracked'" class="card p-3 text-left transition duration-[120ms] hover:-translate-y-0.5"><div class="muted">Tracked</div><div class="text-2xl font-bold text-emerald-700 dark:text-emerald-300 tabular-nums" x-text="rows.filter(r => r.tracked).length"></div></button>
+    <button @click="show = 'untracked'" class="card p-3 text-left"><div class="muted">Not tracked</div><div class="text-2xl font-bold tabular-nums" x-text="rows.filter(r => !r.tracked).length"></div></button>
+    <button @click="show = 'stale'" class="card p-3 text-left"><div class="muted">Idle 6+ months</div><div class="text-2xl font-bold text-amber-700 dark:text-amber-300 tabular-nums" x-text="rows.filter(r => stale(r)).length"></div></button>
+  </div>
+
+  <div class="mb-3 flex flex-wrap items-center gap-2">
+    <div class="relative min-w-[12rem] flex-1">
+      <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 muted">{{ icon("search") }}</span>
+      <label for="rq" class="sr-only">Search repos</label>
+      <input id="rq" x-model="q" placeholder="Search repos…" class="input pl-9">
+    </div>
+    <div class="tabs overflow-x-auto" role="tablist" aria-label="Show">
+      <template x-for="v in [['all', 'All'], ['tracked', 'Tracked'], ['untracked', 'Not tracked'], ['stale', 'Idle 6m+']]" :key="v[0]">
+        <button role="tab" :aria-selected="show === v[0]" @click="show = v[0]" class="tab" x-text="v[1]"></button>
+      </template>
+    </div>
+    <label for="rsort" class="sr-only">Sort</label>
+    <select id="rsort" x-model="sort" class="select">
+      <option value="risk">Sort: most at risk</option><option value="name">Sort: name</option><option value="push">Sort: last push</option>
+    </select>
+    <div class="relative" x-data="{ o: false }" @keydown.escape="o = false">
+      <button @click="o = !o" :aria-expanded="o" class="btn-secondary">Bulk actions {{ icon("chevron") }}</button>
+      <div x-show="o" x-cloak x-transition.opacity.duration.150ms @click.outside="o = false" class="card absolute right-0 top-12 z-30 w-60 p-1.5 shadow-xl">
+        <button @click="o = false; bulk(1)" class="btn-ghost w-full justify-start" x-text="'Track ' + vw.plural(list.length, 'shown repo')"></button>
+        <button @click="o = false; bulk(0)" class="btn-ghost w-full justify-start" x-text="'Untrack ' + vw.plural(list.length, 'shown repo')"></button>
+      </div>
+    </div>
+  </div>
+
+  <ul class="card divide-y divide-slate-100 dark:divide-slate-800">
+    <template x-for="r in list" :key="r.name">
+      <li class="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 transition-opacity duration-[180ms]" :class="!r.tracked && 'opacity-60'">
+        <button @click="toggle(r)" role="switch" :aria-checked="!!r.tracked" :aria-label="'Track ' + r.name" class="grid h-11 w-14 shrink-0 place-items-center rounded-lg">
+          <span class="relative h-7 w-12 rounded-full transition-colors duration-[150ms]" :class="r.tracked ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'">
+            <span class="absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform duration-[150ms] ease-out" :class="r.tracked && 'translate-x-5'"></span></span>
+        </button>
+        <div class="min-w-[13rem] flex-1">
+          <div class="flex flex-wrap items-center gap-2">
+            <a :href="'https://github.com/{{ cfg.ORG }}/' + r.name" target="_blank" rel="noopener" class="inline-flex min-h-[40px] items-center font-semibold hover:underline" x-text="r.name"></a>
+            <span x-show="r.private" class="pill-slate">private</span>
+            <span x-show="stale(r)" class="pill-amber" x-text="'idle ' + idle(r)"></span>
+          </div>
+          <div class="muted">
+            <span x-text="r.language || 'no code detected'"></span> ·
+            <span :title="vw.local(r.pushed_at)" x-text="r.pushed_at ? 'pushed ' + vw.ago(r.pushed_at) : 'never pushed'"></span>
+            <template x-if="r.deps"><span> · <a :href="'/repos/' + r.name + '/deps'" class="link" x-text="vw.plural(r.deps, 'library', 'libraries')"></a></span></template>
+            <span x-show="r.scan_error" class="text-red-700 dark:text-red-300" x-text="' · ' + (r.scan_error || '').slice(0, 60)"></span>
+          </div>
+        </div>
+
+        <div class="flex min-w-[10rem] items-center gap-1.5 muted" x-data="{ edit: false }">
+          {{ icon("branch") }}
+          <template x-if="!r.default_branch"><span class="italic">empty repo</span></template>
+          <template x-if="r.default_branch && !edit">
+            <span class="flex items-center gap-1"><span class="font-mono text-slate-800 dark:text-slate-200" x-text="r.tracked_branch"></span>
+              <button @click="edit = true; loadBranches(r); $nextTick(() => $refs.sel.focus())" class="btn-icon" :aria-label="'Change tracked branch of ' + r.name">{{ icon("pencil") }}</button></span>
+          </template>
+          <template x-if="r.default_branch && edit">
+            <span><label class="sr-only" :for="'b-' + r.name" x-text="'Tracked branch of ' + r.name"></label>
+            <select :id="'b-' + r.name" x-ref="sel" @change="setBranch(r, $event.target); edit = false" @blur="edit = false" @keydown.escape="edit = false" class="select w-48 font-mono">
+              <template x-for="b in (branches[r.name]?.list || [r.tracked_branch])" :key="b">
+                <option :value="b" :selected="b === r.tracked_branch" x-text="b + (b === r.default_branch ? ' (default)' : '')"></option>
+              </template>
+              <template x-if="branches[r.name]?.loading"><option disabled>loading…</option></template>
+            </select></span>
+          </template>
+        </div>
+
+        <a :href="'/?repo=' + r.name" class="flex min-h-[40px] w-40 items-center justify-end gap-2 rounded-lg" :aria-label="r.name + ': ' + vw.plural(r.open, 'confirmed finding')">
+          <template x-if="r.open">
+            <span class="flex items-center gap-2"><span class="font-medium" x-text="vw.plural(r.open, 'finding')"></span>
+              <span class="flex items-center gap-1" aria-hidden="true">
+                <template x-for="(n, p) in r.p" :key="p"><template x-if="n"><span class="inline-flex items-center gap-0.5 text-[13px] muted"><span class="h-2 w-2 rounded-full" :class="['bg-red-600', 'bg-orange-500', 'bg-amber-400', 'bg-slate-400'][p]"></span><span x-text="n"></span></span></template></template>
+              </span></span>
+          </template>
+          <span x-show="!r.open" class="muted">no findings</span>
+        </a>
+      </li>
+    </template>
+    <li x-show="!list.length" class="p-6 text-center muted">No repos match.</li>
+  </ul>
+  <p class="mt-3 muted">Untracking hides a repo everywhere and stops scans, AI reviews, mails and fixes for it. Its data is kept, so tracking it again picks up with a fresh scan.</p>
+</div>
+
+<script>
+function repos() {
+  return {
+    rows: {{ rows|tojson }}, q: "", show: "all", sort: "risk", branches: {},
+    stale(r) { return r.pushed_at && (Date.now() - Date.parse(r.pushed_at)) > 182 * 864e5; },
+    idle(r) { const m = Math.floor((Date.now() - Date.parse(r.pushed_at)) / (30 * 864e5)); return m >= 12 ? Math.floor(m / 12) + "y" : m + "mo"; },
+    get list() {
+      const q = this.q.toLowerCase();
+      const by = {
+        risk: (a, b) => (b.p[0] - a.p[0]) || (b.open - a.open) || (Date.parse(b.pushed_at || 0) - Date.parse(a.pushed_at || 0)),
+        name: (a, b) => a.name.localeCompare(b.name),
+        push: (a, b) => Date.parse(b.pushed_at || 0) - Date.parse(a.pushed_at || 0),
+      }[this.sort];
+      return this.rows.filter(r => r.name.toLowerCase().includes(q) &&
+        (this.show === "all" || (this.show === "tracked" ? r.tracked : this.show === "untracked" ? !r.tracked : this.stale(r)))).sort(by);
+    },
+    async save(names, v) { await vw.post("/api/repos/track", { names: names.join(","), tracked: v }); },
+    toggle(r) {
+      const v = r.tracked ? 0 : 1; r.tracked = v; this.save([r.name], v);
+      vw.toast(`${r.name} is ${v ? "tracked" : "no longer tracked"}`, { kind: "ok", undo: () => { r.tracked = 1 - v; this.save([r.name], 1 - v); } });
+    },
+    bulk(v) {
+      const rs = this.list.filter(r => !!r.tracked !== !!v);
+      if (!rs.length) return vw.toast(`All shown repos are already ${v ? "tracked" : "untracked"}.`);
+      if (!confirm(`${v ? "Track" : "Untrack"} ${vw.plural(rs.length, "repo")}?\n\n${rs.map(r => r.name).join("\n")}`)) return;
+      rs.forEach(r => r.tracked = v); this.save(rs.map(r => r.name), v);
+      vw.toast(`${v ? "Tracked" : "Untracked"} ${vw.plural(rs.length, "repo")}`, { kind: "ok", timeout: 8000,
+        undo: () => { rs.forEach(r => r.tracked = 1 - v); this.save(rs.map(r => r.name), 1 - v); } });
+    },
+    async loadBranches(r) {
+      if (this.branches[r.name] || !r.default_branch) return;
+      this.branches[r.name] = { loading: true, list: [r.tracked_branch] };
+      const res = await (await fetch(`/api/repos/${encodeURIComponent(r.name)}/branches`)).json();
+      this.branches[r.name] = { list: res.branches, error: res.error };
+    },
+    setBranch(r, el) {
+      const b = el.value;
+      if (!b || b === r.tracked_branch) return;
+      if (!confirm(`Track "${b}" for ${r.name}? The repo is rescanned on the next run.`)) { el.value = r.tracked_branch; return; }
+      r.tracked_branch = b;
+      vw.post(`/api/repos/${encodeURIComponent(r.name)}/branch`, { branch: b });
+      vw.toast(`${r.name} now tracks ${b}`, { kind: "ok" });
+    },
+    async job(name, msg) {
+      const r = await vw.post("/api/run/" + name);
+      vw.toast(r.started ? msg : "A job is already running.", { kind: r.started ? "ok" : "info" });
+    },
+  };
+}
+</script>
+{% endblock %}

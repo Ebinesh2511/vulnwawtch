@@ -1,0 +1,16 @@
+{% from "_ui.html" import icon %}{# expects Alpine `ev` (evidence item) in scope #}
+<a :href="ev.url" target="_blank" rel="noopener" class="code group" :aria-label="KIND[ev.kind] + ': ' + ev.file + ' line ' + ev.hit + ' (opens GitHub in a new tab)'">
+  <div class="code-head">
+    <span class="rounded px-1.5 py-0.5 font-sans text-xs font-medium" :class="ev.kind === 'used' ? 'bg-blue-500/20 text-blue-200' : 'bg-slate-700 text-slate-100'" x-text="KIND[ev.kind]"></span>
+    <span class="truncate" x-text="ev.file + ':' + ev.hit"></span>
+    <span class="ml-auto inline-flex shrink-0 items-center gap-1 font-sans text-slate-300 group-hover:text-blue-300">GitHub {{ icon("external", "w-3.5 h-3.5") }}</span>
+  </div>
+  <div class="overflow-x-auto py-1.5 font-mono text-[13px] leading-6">
+    <template x-for="l in ev.lines" :key="l[0]">
+      <div class="flex" :class="l[0] === ev.hit ? 'bg-amber-400/15' : ''">
+        <span class="w-12 shrink-0 select-none pr-3 text-right text-slate-500" x-text="l[0]"></span>
+        <span class="whitespace-pre pr-3" :class="l[0] === ev.hit ? 'text-amber-100' : 'text-slate-300'" x-text="l[1]"></span>
+      </div>
+    </template>
+  </div>
+</a>

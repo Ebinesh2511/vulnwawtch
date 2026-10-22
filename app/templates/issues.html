@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, page_header %}
+{% block title %}All vulnerabilities{% endblock %}
+{% block content %}
+<div x-data="vulns()" x-init="init()" @keydown.escape.window="close()" @vw-refresh.window="load()">
+  {% call page_header("All vulnerabilities", "Every advisory that matches an installed version in a tracked repo. Click a row for details and the fix.") %}
+    <span class="muted tabular-nums" x-text="vw.plural(list.length, 'advisory', 'advisories')"></span>
+  {% endcall %}
+
+  <div class="mb-3 flex flex-wrap items-center gap-2">
+    <div class="tabs hidden lg:flex" role="tablist" aria-label="Which advisories">
+      <template x-for="v in VIEWS" :key="v[0]">
+        <button role="tab" :aria-selected="view === v[0]" @click="view = v[0]; page = 1" class="tab">
+          <span x-text="v[1]"></span> <span class="tabular-nums opacity-70" x-text="count(v[0])"></span></button>
+      </template>
+    </div>
+    <label class="sr-only" for="vsel">Which advisories</label>
+    <select id="vsel" x-model="view" @change="page = 1" class="select lg:hidden">
+      <template x-for="v in VIEWS" :key="v[0]"><option :value="v[0]" x-text="v[1] + ' (' + count(v[0]) + ')'"></option></template>
+    </select>
+    <div class="relative min-w-[12rem] flex-1">
+      <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 muted">{{ icon("search") }}</span>
+      <label for="vq" class="sr-only">Search advisories</label>
+      <input id="vq" x-model.debounce.150ms="q" @input="page = 1" placeholder="Search ID, package or repo…" class="input pl-9">
+    </div>
+    <label for="vrepo" class="sr-only">Repository</label>
+    <select id="vrepo" x-model="repo" @change="page = 1" class="select"><option value="">All repos</option>
+      <template x-for="r in repos" :key="r"><option :value="r" x-text="r"></option></template></select>
+    <label for="vsev" class="sr-only">Severity</label>
+    <select id="vsev" x-model="sev" @change="page = 1" class="select"><option value="">All severities</option>
+      <template x-for="s in ['CRITICAL', 'HIGH', 'MODERATE', 'LOW', 'UNKNOWN']" :key="s"><option :value="s" x-text="s"></option></template></select>
+  </div>
+  <p class="mb-3 text-[13px] muted">Sorted by <b x-text="SORTS[sort]"></b><span x-show="sort === 'risk'"> (exploited first, then severity, then newest)</span>. Click a column title to sort.</p>
+
+  <!-- table: md and up -->
+  <div class="card hidden overflow-hidden md:block">
+    <table class="w-full table-fixed text-sm">
+      <colgroup><col class="w-[15rem]"><col><col class="w-[12rem]"><col class="w-[7.5rem]"><col class="w-[7rem]"><col class="w-[7.5rem]"></colgroup>
+      <thead class="border-b border-slate-200 text-left text-[13px] muted dark:border-slate-800">
+        <tr>
+          <template x-for="h in [['risk', 'Advisory'], ['summary', 'Summary'], ['package', 'Library · repo'], ['fixed', 'Fixed in'], ['published', 'Published'], ['status', 'Status']]" :key="h[0]">
+            <th scope="col" class="px-4 py-2 font-medium" :aria-sort="sort === h[0] ? (dir > 0 ? 'ascending' : 'descending') : 'none'">
+              <button @click="sortBy(h[0])" class="inline-flex min-h-[40px] items-center gap-1 hover:text-slate-900 dark:hover:text-white">
+                <span x-text="h[1]"></span><span x-show="sort === h[0]" x-text="dir > 0 ? '▲' : '▼'" class="text-xs"></span></button>
+            </th>
+          </template>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+        <template x-for="i in paged" :key="i.id">
+          <tr @click="openIssue(i.id, $event)" @keydown.enter="openIssue(i.id, $event)" tabindex="0" :data-row="i.id"
+              class="cursor-pointer align-top transition duration-[120ms] hover:bg-slate-50 dark:hover:bg-slate-800/50" :class="sel && sel.id === i.id && 'bg-blue-50 dark:bg-blue-500/10'">
+            <td class="px-4 py-3">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span :class="'sev-' + (i.severity || 'UNKNOWN')" x-text="i.severity"></span>
+                <span x-show="i.kev" class="text-red-600 dark:text-red-400" title="Exploited in the wild">{{ icon("flame", "w-4 h-4", "Exploited in the wild") }}</span>
+                <span x-show="i.in_feed" class="muted" title="Mentioned in a recent news / advisory feed">{{ icon("news", "w-4 h-4", "In recent feeds") }}</span>
+              </div>
+              <div class="mt-1 truncate font-mono text-[13px] font-medium" x-text="i.vuln_id"></div>
+            </td>
+            <td class="px-4 py-3"><p class="line-clamp-2" :title="i.summary" x-text="i.summary"></p></td>
+            <td class="px-4 py-3"><div class="truncate font-mono text-[13px]" x-text="i.package + ' ' + (i.version || '')"></div>
+              <div class="truncate muted" x-text="i.repo"></div></td>
+            <td class="px-4 py-3 font-mono text-[13px] text-emerald-700 dark:text-emerald-300" x-text="i.fixed.at(-1) || '—'"></td>
+            <td class="px-4 py-3 muted" :title="vw.local(i.published)" x-text="vw.ago(i.published)"></td>
+            <td class="px-4 py-3"><span :class="STATUS[i.status][1]" x-text="STATUS[i.status][0]"></span></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- cards: under md -->
+  <ul class="space-y-2 md:hidden">
+    <template x-for="i in paged" :key="i.id">
+      <li><button @click="openIssue(i.id, $event)" class="card block w-full p-4 text-left">
+        <div class="flex flex-wrap items-center gap-2"><span :class="'sev-' + (i.severity || 'UNKNOWN')" x-text="i.severity"></span>
+          <span class="font-mono text-[13px] font-medium" x-text="i.vuln_id"></span>
+          <span :class="STATUS[i.status][1]" class="ml-auto" x-text="STATUS[i.status][0]"></span></div>
+        <p class="mt-2 line-clamp-2" x-text="i.summary"></p>
+        <p class="mt-1 muted"><span class="font-mono" x-text="i.package + ' ' + (i.version || '')"></span>
+          <span x-show="i.fixed.length" class="text-emerald-700 dark:text-emerald-300" x-text="' → ' + i.fixed.at(-1)"></span> · <span x-text="i.repo"></span></p>
+      </button></li>
+    </template>
+  </ul>
+
+  <div x-show="loaded && !list.length" class="card p-10 text-center muted">Nothing matches. <button class="link" @click="q = ''; repo = ''; sev = ''">Clear filters</button></div>
+  <template x-if="!loaded"><div class="space-y-2"><template x-for="n in 6"><div class="skeleton h-14 w-full"></div></template></div></template>
+  <div x-show="paged.length < list.length" class="mt-4 text-center">
+    <button @click="page++" class="btn-secondary" x-text="'Show ' + Math.min(50, list.length - paged.length) + ' more'"></button></div>
+
+  <!-- drawer -->
+  <div x-show="sel" x-cloak x-transition.opacity.duration.150ms class="fixed inset-0 z-40 bg-slate-950/50" @click="close()" aria-hidden="true"></div>
+  <aside x-show="sel" x-cloak role="dialog" aria-modal="true" aria-labelledby="drawer-title" x-ref="drawer" tabindex="-1"
+         x-transition:enter="transition duration-[220ms] ease-out" x-transition:enter-start="translate-x-full" x-transition:enter-end="translate-x-0"
+         x-transition:leave="transition duration-[180ms] ease-out" x-transition:leave-start="translate-x-0" x-transition:leave-end="translate-x-full"
+         class="fixed inset-y-0 right-0 z-50 flex w-full max-w-3xl flex-col bg-slate-50 shadow-2xl ring-1 ring-slate-200 dark:bg-slate-950 dark:ring-slate-800">
+    <template x-if="sel">
+      <div class="flex min-h-0 flex-1 flex-col">
+        <div class="flex items-start gap-3 border-b border-slate-200 bg-white px-5 py-4 dark:border-slate-800 dark:bg-slate-900">
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-2"><span :class="'sev-' + (sel.severity || 'UNKNOWN')" x-text="sel.severity"></span>
+              <span class="font-mono font-medium" x-text="sel.vuln_id"></span><span class="muted" x-text="sel.aliases.join(', ')"></span></div>
+            <h2 id="drawer-title" class="mt-2 text-lg font-semibold leading-snug" x-text="sel.summary"></h2>
+            <p class="mt-1 muted"><span class="font-mono" x-text="sel.package + ' ' + (sel.version || '')"></span> in <b x-text="sel.repo"></b>
+              · published <span :title="vw.local(sel.published)" x-text="vw.ago(sel.published)"></span>
+              <span x-show="sel.fixed.length"> · fixed in <span class="font-mono text-emerald-700 dark:text-emerald-300" x-text="sel.fixed.join(', ')"></span></span></p>
+            <a :href="'https://osv.dev/vulnerability/' + sel.vuln_id" target="_blank" rel="noopener" class="link mt-1 inline-flex min-h-[40px] items-center gap-1">Full advisory on osv.dev {{ icon("external", "w-3.5 h-3.5") }}</a>
+          </div>
+          <button @click="close()" class="btn-icon btn-ghost" aria-label="Close details">{{ icon("x", "w-5 h-5") }}</button>
+        </div>
+        <div class="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+          <h3 class="section-title mb-1">The fix for <span class="font-mono" x-text="sel.package"></span> in <span x-text="sel.repo"></span></h3>
+          <p class="mb-4 muted">This advisory is one of the issues in this library. The fix below covers all of them.</p>
+          <template x-if="!findingsLoaded"><div class="space-y-2"><div class="skeleton h-5 w-2/3"></div><div class="skeleton h-24 w-full"></div></div></template>
+          <template x-if="findingsLoaded && finding">
+            <div>{% include "_finding_detail.html" %}</div>
+          </template>
+          <p x-show="findingsLoaded && !finding" class="muted">No analysis for this library yet.</p>
+        </div>
+      </div>
+    </template>
+  </aside>
+</div>
+
+<script>
+function vulns() {
+  return {
+    ...vwFinding(),
+    rows: [], loaded: false, view: "actionable", q: "", repo: "", sev: "", sort: "risk", dir: 1, page: 1,
+    sel: null, finding: null, findings: [], findingsLoaded: false, autofixMode: "dry_run", lastFocus: null,
+    C: {{ cats|tojson }}, RANK: {{ ranks|tojson }},
+    get f() { return this.finding; },  // _finding_detail.html reads `f`
+    VIEWS: [["actionable", "Actionable"], ["backlog", "Backlog"], ["closed", "Closed"], ["all", "All"]],
+    SORTS: { risk: "risk", summary: "summary", package: "library", fixed: "fix version", published: "publish date", status: "status" },
+    STATUS: { open: ["Open", "pill-red"], in_progress: ["In progress", "pill-blue"], fixed: ["Fixed", "pill-green"],
+              ignored: ["Ignored", "pill-slate"], not_affected: ["Not reachable", "pill-slate"] },
+    SEVR: { CRITICAL: 4, KEV: 4, HIGH: 3, MODERATE: 2, MEDIUM: 2, LOW: 1 },
+
+    async init() {
+      await this.load();
+      if ({{ open_id }}) this.openIssue({{ open_id }}, null, true);
+      window.addEventListener("popstate", () => {
+        const m = location.pathname.match(/^\/issues\/(\d+)/);
+        m ? this.openIssue(+m[1], null, true) : (this.sel = null);
+      });
+    },
+    async load() {
+      this.rows = (await (await fetch("/api/issues")).json()).issues; this.loaded = true;
+      if (this.findingsLoaded) this.loadFindings();
+    },
+    async loadFindings() {
+      const d = await (await fetch("/api/findings")).json();
+      this.findings = d.findings; this.autofixMode = d.autofix_mode; this.findingsLoaded = true;
+      if (this.sel) this.finding = this.findings.find(f => f.ids.includes(this.sel.id)) || null;
+    },
+    inView(i, v) {
+      const live = ["open", "in_progress"].includes(i.status);
+      return v === "all" || (v === "actionable" ? live && !i.backlog : v === "backlog" ? live && i.backlog : !live);
+    },
+    count(v) { return this.rows.filter(i => this.inView(i, v)).length; },
+    get repos() { return [...new Set(this.rows.map(i => i.repo))].sort(); },
+    get list() {
+      const q = this.q.toLowerCase();
+      const key = {
+        risk: i => [-i.kev, -(this.SEVR[i.severity] || 0), -(Date.parse(i.published) || 0)],
+        summary: i => [i.summary || ""], package: i => [i.package, i.repo], fixed: i => [i.fixed.at(-1) || ""],
+        published: i => [Date.parse(i.published) || 0], status: i => [i.status],
+      }[this.sort];
+      return this.rows.filter(i => this.inView(i, this.view) && (!this.repo || i.repo === this.repo) && (!this.sev || (i.severity || "UNKNOWN") === this.sev)
+          && (!q || [i.vuln_id, ...i.aliases, i.package, i.repo, i.summary].join(" ").toLowerCase().includes(q)))
+        .sort((a, b) => { const x = key(a), y = key(b); for (let n = 0; n < x.length; n++) { if (x[n] < y[n]) return -this.dir; if (x[n] > y[n]) return this.dir; } return 0; });
+    },
+    get paged() { return this.list.slice(0, this.page * 50); },
+    sortBy(k) { this.dir = this.sort === k ? -this.dir : 1; this.sort = k; },
+
+    async openIssue(id, ev, fromUrl) {
+      const i = this.rows.find(r => r.id === id);
+      if (!i) return;
+      this.lastFocus = ev ? ev.currentTarget : null;
+      this.sel = i; this.finding = null;
+      if (!fromUrl) history.pushState({}, "", "/issues/" + id);
+      document.body.style.overflow = "hidden";
+      this.$nextTick(() => this.$refs.drawer.focus());
+      if (!this.findingsLoaded) await this.loadFindings();
+      else this.finding = this.findings.find(f => f.ids.includes(id)) || null;
+    },
+    close() {
+      if (!this.sel) return;
+      this.sel = null; document.body.style.overflow = "";
+      if (location.pathname !== "/issues") history.pushState({}, "", "/issues");
+      this.lastFocus?.focus();
+    },
+  };
+}
+</script>
+{% endblock %}
