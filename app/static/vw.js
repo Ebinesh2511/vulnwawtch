@@ -102,6 +102,14 @@ document.addEventListener("alpine:init", () => {
     STRATEGY: { patch_upgrade: "Patch upgrade", minor_upgrade: "Minor upgrade", major_upgrade: "Major upgrade",
                 override_transitive: "Override pulled-in version", config_mitigation: "Config change", replace_library: "Replace library",
                 remove_unused: "Remove unused library", no_fix_available: "No fix yet" },
+    REACH: {
+      called: ["Vulnerable code is called", "pill-red"], cli_used: ["Used through its CLI / dev server", "pill-red"],
+      symbol_used: ["Vulnerable feature used", "pill-amber"], symbol_not_used: ["Vulnerable feature not found", "pill-green"],
+      not_called: ["Never called", "pill-green"], imported: ["Imported, never called", "pill-green"],
+      required: ["Listed only, code unused", "pill-green"], not_affected: ["Version not affected", "pill-green"],
+      not_imported: ["Never imported by code", "pill-green"], transitive: ["Only via another library", "pill-slate"],
+      unknown: ["Unknown", "pill-slate"],
+    },
     researchNotes: {},
     async loadResearch(f) {
       if (!this.researchNotes[f.id]) this.researchNotes[f.id] = (await (await fetch(`/api/findings/${f.id}/research`)).json()).html || "<p>No notes.</p>";

@@ -210,6 +210,14 @@ def analyze_group(repo, eco, name, version, log=print):
              f"\n<manifest>\n{ctx['manifest']}\n</manifest>\n"
              f"\n<usage files=\"{', '.join(ctx['files'])}\">\n{ctx['usage']}\n</usage>\n")
 
+    rc = db.one("SELECT method, detail FROM reachability WHERE repo=? AND ecosystem=? AND package=?", repo, eco, name)
+    if rc and rc["method"] == "govulncheck":
+        adv = db.jl(rc["detail"], {}).get("advisories", {})
+        paths = [f"{vid}: " + " -> ".join(fr["name"] for fr in reversed(a["path"]))
+                 for vid, a in adv.items() if a["level"] == "called" and vid in {i["vuln_id"] for i in issues}]
+        if paths:
+            facts += ("\n<call_graph tool=\"govulncheck\">\nThe Go call graph proves our code calls the vulnerable function:\n"
+                      + "\n".join(paths[:6]) + "\n</call_graph>\n")
     triage = _gen(TRIAGE_MODELS, facts + "\nAssess this finding.", Triage)
     guide = None
     if triage.affected != "no":

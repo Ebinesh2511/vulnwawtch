@@ -1,5 +1,6 @@
 """Dashboard (FastAPI + Jinja + Alpine). Pages render a shell; lists come from the /api/* JSON routes."""
 import fnmatch
+import html
 import json
 import re
 from datetime import datetime, timezone
@@ -16,7 +17,7 @@ from . import ai, autofix, checker, classify, config, db, findings, gh, jobs, ma
 EMAIL_RE = re.compile(r"[^@\s,;]+@[^@\s,;]+\.[A-Za-z]{2,}")
 HERE = Path(__file__).parent
 
-app = FastAPI(title="VulnWatch")
+app = FastAPI(title="VulnWatch", docs_url="/api/docs", redoc_url=None)  # /docs is the user documentation page
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 tpl = Jinja2Templates(directory=HERE / "templates")
 tpl.env.filters["jl"] = db.jl
@@ -315,6 +316,37 @@ def api_check(cid: str):
 @app.get("/api/checks")
 def api_checks():
     return {"checks": db.q("SELECT id, url, repo, status, verdict, created_at FROM checks ORDER BY created_at DESC LIMIT 15")}
+
+
+# ---------- docs ----------
+
+DOC = HERE.parent / "docs" / "HOW-IT-WORKS.md"
+
+
+def _slug(text):
+    """GitHub-style heading id, so the doc's own #links work: lower case, drop punctuation, spaces → '-'."""
+    return re.sub(r"\s", "-", re.sub(r"[^\w\s-]", "", text.lower()).strip())
+
+
+@app.get("/docs", response_class=HTMLResponse)
+def docs(request: Request):
+    """The end-to-end doc, rendered from docs/HOW-IT-WORKS.md on every request (edit the file, reload)."""
+    tokens = _md.parse(DOC.read_text())
+    if tokens and tokens[0].type == "heading_open" and tokens[0].tag == "h1":
+        tokens = tokens[3:]  # the page header already shows the title; keep one <h1> per page
+    toc = []
+    for i, t in enumerate(tokens):
+        if t.type == "heading_open":
+            text = tokens[i + 1].content
+            t.attrSet("id", _slug(text))
+            t.attrSet("class", "scroll-target-doc")
+            if t.tag in ("h2", "h3"):
+                toc.append({"level": int(t.tag[1]), "id": _slug(text), "text": text})
+        elif t.type == "fence" and t.info.strip() == "mermaid":
+            t.type, t.content = "html_block", f'<figure class="doc-diagram"><pre class="mermaid-src" hidden>{html.escape(t.content)}</pre></figure>'
+    body = _md.renderer.render(tokens, _md.options, {})
+    body = body.replace('href="docs/HOW-IT-WORKS.md"', 'href="/docs"')  # a self-link in the doc → this page
+    return page(request, "docs.html", body=body, toc=toc, updated=DOC.stat().st_mtime)
 
 
 # ---------- runs + jobs ----------

@@ -1,5 +1,7 @@
 # VulnWatch
 
+> **Full end-to-end explanation with diagrams:** [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md)
+
 Watches vulnerability feeds, matches them against the `guvi-geek` repos, and shows the results on a dashboard.
 AI triage and email alerts are being added next (see `../PLAN.md`).
 
@@ -54,6 +56,19 @@ Open http://127.0.0.1:8000 and press **Run full check**.
 4. Set `DASHBOARD_URL` to an address the leads can open, or the guide link in mails only works on this machine.
 
 Models are comma lists tried in order. `gemini-flash-latest` is not the default: in testing it blocked about half of security prompts (`BlockedReason.OTHER`).
+
+## Reachability (`app/reachability.py`)
+
+Is the vulnerable code actually used? The cheapest tool that can answer is used:
+
+- **Libraries per repo:** the `deps` index (one SQL lookup, no search).
+- **Go: call graph.** [`govulncheck`](https://go.dev/doc/tutorials/govulncheck) runs per `go.mod` and gives a verdict per advisory:
+  - **called**, with the call path from our code, linked to GitHub;
+  - **imported** (package used, vulnerable function never called);
+  - **required** (only listed).
+  "Imported" and "required" are proof, so those advisories drop to P3 and leave the confirmed list. "Called" advisories leave the backlog even when old or unscored. Standard-library verdicts are only trusted when *called*, because govulncheck judges stdlib by this machine's Go version. Install it with `go install golang.org/x/vuln/cmd/govulncheck@latest`.
+- **npm / PyPI: vulnerable-symbol search.** Gemini names the vulnerable functions, options and CLI commands from the advisories. ripgrep then looks for them in files that import the library, and for CLI use in `package.json` scripts, Dockerfiles and CI files (e.g. `vite --host 0.0.0.0`). Verdicts: used / used via CLI / not found / never imported / only via another library. Not proof, so "not found" lowers priority by one level only.
+- The verdicts feed priority, the AI review (which gets the call path) and the research prompt. Dashboard: finding → **Reachability**.
 
 ## Research (`app/research.py`)
 

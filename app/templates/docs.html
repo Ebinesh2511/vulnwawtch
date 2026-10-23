@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, page_header %}
+{% block title %}Docs{% endblock %}
+{% block content %}
+<div x-data="docs()" x-init="init()" @keydown.escape.window="zoom = null">
+  {% call page_header("How VulnWatch works", "End to end: scanning, matching, AI review, research, fixes, escalations and email.") %}
+    <span class="muted" x-data x-text="'Updated ' + vw.ago(new Date({{ updated }} * 1000).toISOString())"></span>
+  {% endcall %}
+
+  <div class="grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[15rem_minmax(0,1fr)]">
+    <!-- contents -->
+    <nav aria-label="On this page" class="min-w-0 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
+      <details class="card p-3 lg:hidden" x-ref="mtoc">
+        <summary class="flex min-h-[40px] cursor-pointer items-center font-semibold">On this page</summary>
+        <ul class="mt-2 space-y-0.5">
+          {% for h in toc %}
+          <li><a href="#{{ h.id }}" @click="$refs.mtoc.open = false" class="flex min-h-[40px] items-center rounded-md px-2 {{ 'pl-6 muted' if h.level == 3 else 'font-medium' }} hover:bg-slate-100 dark:hover:bg-slate-800">{{ h.text }}</a></li>
+          {% endfor %}
+        </ul>
+      </details>
+      <div class="hidden lg:block">
+        <p class="mb-2 px-2 text-xs font-semibold uppercase tracking-wide muted">On this page</p>
+        <ul class="space-y-0.5 border-l border-slate-200 dark:border-slate-800">
+          {% for h in toc %}
+          <li><a href="#{{ h.id }}" class="-ml-px block border-l-2 py-1.5 pr-2 text-sm transition duration-[120ms] {{ 'pl-6' if h.level == 3 else 'pl-3' }}"
+                 :class="active === '{{ h.id }}' ? 'border-blue-600 font-medium text-blue-700 dark:border-blue-400 dark:text-blue-300' : 'border-transparent muted hover:text-slate-900 dark:hover:text-white'"
+                 :aria-current="active === '{{ h.id }}' ? 'location' : null">{{ h.text }}</a></li>
+          {% endfor %}
+        </ul>
+      </div>
+    </nav>
+
+    <!-- document -->
+    <article class="prose doc card min-w-0 max-w-none p-5 sm:p-8" x-ref="doc">{{ body|safe }}</article>
+  </div>
+
+  <!-- full-size diagram -->
+  <div x-show="zoom" x-cloak x-transition.opacity.duration.150ms class="fixed inset-0 z-50 flex flex-col bg-slate-950/80 p-3 sm:p-6" @click.self="zoom = null" role="dialog" aria-modal="true" aria-label="Diagram">
+    <div class="mb-2 flex justify-end"><button @click="zoom = null" class="btn-secondary" aria-label="Close diagram">{{ icon("x") }} Close</button></div>
+    <div class="doc-zoom min-h-0 flex-1 overflow-auto rounded-xl bg-white p-4 dark:bg-slate-900" x-html="zoom"></div>
+  </div>
+</div>
+
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
+window.vwMermaid = mermaid;
+window.dispatchEvent(new Event("vw-mermaid"));
+</script>
+<script>
+function docs() {
+  return {
+    active: "", zoom: null, n: 0,
+    init() {
+      const draw = () => this.draw();
+      if (window.vwMermaid) draw(); else window.addEventListener("vw-mermaid", draw, { once: true });
+      // redraw diagrams in the right colours when the theme changes
+      new MutationObserver(() => window.vwMermaid && this.draw()).observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+      // highlight the section being read
+      const hs = [...this.$refs.doc.querySelectorAll("h2[id], h3[id]")];
+      const io = new IntersectionObserver(es => {
+        const vis = es.filter(e => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (vis.length) this.active = vis[0].target.id;
+      }, { rootMargin: "-70px 0px -65% 0px" });
+      hs.forEach(h => io.observe(h));
+      // external links open in a new tab
+      this.$refs.doc.querySelectorAll('a[href^="http"]').forEach(a => { a.target = "_blank"; a.rel = "noopener"; });
+    },
+    async draw() {
+      const dark = document.documentElement.classList.contains("dark");
+      // same font + size as the CSS around the diagram, or Mermaid measures one size and draws another (clipped labels)
+      window.vwMermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default", securityLevel: "strict",
+                                   fontFamily: getComputedStyle(document.body).fontFamily, themeVariables: { fontSize: "14px" } });
+      for (const fig of this.$refs.doc.querySelectorAll("figure.doc-diagram")) {
+        const src = fig.querySelector(".mermaid-src").textContent;
+        try {
+          const { svg } = await window.vwMermaid.render("dg" + (++this.n), src);
+          let box = fig.querySelector(".doc-diagram-box");
+          if (!box) {
+            box = document.createElement("button");
+            box.type = "button"; box.className = "doc-diagram-box"; box.setAttribute("aria-label", "Open diagram full size");
+            box.addEventListener("click", () => { this.zoom = box.innerHTML; });
+            fig.appendChild(box);
+          }
+          box.innerHTML = svg;
+        } catch (e) {
+          fig.insertAdjacentHTML("beforeend", '<p class="text-red-700 dark:text-red-300">Diagram could not be drawn.</p>');
+        }
+      }
+    },
+  };
+}
+</script>
+{% endblock %}

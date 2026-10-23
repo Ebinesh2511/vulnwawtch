@@ -114,15 +114,31 @@ def priority(cat, severity, kev, dev_only, affected):
     return p
 
 
+NOT_REACHED = ("imported", "required", "not_affected")       # govulncheck verdicts
+WEAK_NOT_USED = ("symbol_not_used", "not_imported")           # symbol-search verdicts
+
+
+def reach_level(r, vuln_id):
+    """Per-advisory reachability: Go has one verdict per advisory, symbol search one per library."""
+    if not r:
+        return None
+    method, level, detail = r
+    if method == "govulncheck":
+        return (detail.get("advisories", {}).get(vuln_id) or {}).get("level")
+    return level
+
+
 def run(log=print):
     dev = {}
     for d in db.q("SELECT repo, ecosystem, name, min(IFNULL(dev,0)) dev_only FROM deps GROUP BY repo, ecosystem, name"):
         dev[(d["repo"], d["ecosystem"], d["name"])] = d["dev_only"]
     recs = {r["id"]: json.loads(r["data"]) for r in db.q("SELECT id, data FROM osv_vulns")}
-    counts = [0, 0, 0, 0]
+    reach = {(r["repo"], r["ecosystem"], r["package"]): (r["method"], r["level"], db.jl(r["detail"], {}))
+             for r in db.q("SELECT * FROM reachability")}
+    counts, promoted = [0, 0, 0, 0], 0
     with db.conn() as c:
-        for i in c.execute("SELECT id, vuln_id, aliases, repo, ecosystem, package, summary, severity, kev, triage "
-                           "FROM issues").fetchall():
+        for i in c.execute("SELECT id, vuln_id, aliases, repo, ecosystem, package, summary, severity, kev, triage, "
+                           "backlog, ai_state FROM issues").fetchall():
             rec = recs.get(i["vuln_id"], {})
             if not (rec.get("database_specific") or {}).get("cwe_ids"):
                 # Go/PYSEC records: borrow CWEs from a cached GHSA alias when there is one
@@ -133,7 +149,20 @@ def run(log=print):
             cat = category(rec, i["summary"] or "")
             dev_only = dev.get((i["repo"], i["ecosystem"], i["package"]), 0)
             affected = db.jl(i["triage"], {}).get("affected")
-            p = priority(cat, i["severity"], i["kev"], dev_only, affected)
-            c.execute("UPDATE issues SET category=?, priority=?, dev_only=? WHERE id=?", (cat, p, dev_only, i["id"]))
+            r = reach_level(reach.get((i["repo"], i["ecosystem"], i["package"])), i["vuln_id"])
+            sev = i["severity"]
+            if r == "called" and sev in ("UNKNOWN", None):
+                sev = "HIGH"   # Go's database has no scores; a proven call is treated as high
+            if r == "called" and i["backlog"] and SEV_RANK.get(sev, 0) >= 2:
+                # older advisory, but the call graph proves our code reaches it: make it actionable
+                c.execute("UPDATE issues SET backlog=0, ai_state=CASE WHEN ai_state='skipped' THEN 'pending' ELSE ai_state END "
+                          "WHERE id=?", (i["id"],))
+                promoted += 1
+            p = priority(cat, sev, i["kev"], dev_only, affected)
+            if r in NOT_REACHED:
+                p = 3                      # call graph proves the vulnerable function is never called
+            elif r in WEAK_NOT_USED:
+                p = min(3, p + 1)          # text search: vulnerable names not found, a hint, not proof
+            c.execute("UPDATE issues SET category=?, priority=?, dev_only=?, reach=? WHERE id=?", (cat, p, dev_only, r, i["id"]))
             counts[p] += 1
-    log("classify: " + ", ".join(f"P{n}={counts[n]}" for n in range(4)))
+    log("classify: " + ", ".join(f"P{n}={counts[n]}" for n in range(4)) + (f", {promoted} called advisories moved out of backlog" if promoted else ""))

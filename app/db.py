@@ -88,6 +88,15 @@ CREATE TABLE IF NOT EXISTS research (
   PRIMARY KEY (repo, ecosystem, package)
 );
 
+CREATE TABLE IF NOT EXISTS reachability (
+  repo TEXT, ecosystem TEXT, package TEXT,
+  method TEXT,           -- govulncheck | symbol search
+  level TEXT,            -- called | not_called | symbol_used | symbol_not_used | not_imported | transitive | unknown
+  detail TEXT,           -- JSON: per-advisory map (Go) or symbols + hits (npm/PyPI)
+  sha TEXT, created_at TEXT,
+  PRIMARY KEY (repo, ecosystem, package)
+);
+
 CREATE TABLE IF NOT EXISTS checks (
   id TEXT PRIMARY KEY, url TEXT, repo TEXT,
   status TEXT,           -- queued | running | done | error
@@ -128,7 +137,7 @@ def init():
         c.executescript(SCHEMA)
         # columns added after the first release
         for table, col, decl in [("issues", "category", "TEXT"), ("issues", "priority", "INTEGER"),
-                                 ("issues", "dev_only", "INTEGER DEFAULT 0"), ("issues", "evidence", "TEXT"), ("research", "instructions", "TEXT"),
+                                 ("issues", "dev_only", "INTEGER DEFAULT 0"), ("issues", "evidence", "TEXT"), ("research", "instructions", "TEXT"), ("issues", "reach", "TEXT"),
                                  ("deps", "dev", "INTEGER DEFAULT 0")]:
             if col not in [r[1] for r in c.execute(f"PRAGMA table_info({table})")]:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")

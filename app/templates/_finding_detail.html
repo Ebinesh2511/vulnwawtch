@@ -17,6 +17,55 @@
     </div>
   </div>
 
+  <!-- reachability -->
+  <section class="card p-4">
+    <div class="flex flex-wrap items-center gap-2">
+      {{ icon("code", "w-5 h-5 muted") }}<h4 class="font-semibold">Reachability</h4>
+      <template x-if="f.reach">
+        <span class="flex flex-wrap items-center gap-2">
+          <span :class="REACH[f.reach.level][1]" x-text="REACH[f.reach.level][0]"></span>
+          <span class="pill-slate" x-text="f.reach.method === 'govulncheck' ? 'Go call graph (govulncheck)' : 'Symbol search'"></span>
+        </span>
+      </template>
+    </div>
+    <p x-show="!f.reach" class="mt-2 muted">Not checked yet. Runs on the next check.</p>
+    <template x-if="f.reach && f.reach.method === 'govulncheck'">
+      <ul class="mt-3 space-y-3">
+        <template x-for="[id, a] in Object.entries(f.reach.detail.advisories || {})" :key="id">
+          <li>
+            <div class="flex flex-wrap items-center gap-2"><span class="font-mono text-[13px]" x-text="id"></span>
+              <span :class="REACH[a.level][1]" x-text="REACH[a.level][0]"></span></div>
+            <ol x-show="a.path.length" class="mt-1.5 space-y-1 border-l-2 border-red-500/40 pl-3">
+              <template x-for="(fr, n) in [...a.path].reverse()" :key="n">
+                <li class="font-mono text-[13px]">
+                  <template x-if="fr.url"><a :href="fr.url" target="_blank" rel="noopener" class="link" x-text="fr.name + '  (' + fr.file + ':' + fr.line + ')'"></a></template>
+                  <template x-if="!fr.url"><span :class="n === a.path.length - 1 ? 'text-red-700 dark:text-red-300 font-semibold' : 'muted'" x-text="fr.name + (n === a.path.length - 1 ? '  ← vulnerable' : '')"></span></template>
+                </li>
+              </template>
+            </ol>
+          </li>
+        </template>
+      </ul>
+    </template>
+    <template x-if="f.reach && f.reach.method !== 'govulncheck'">
+      <div class="mt-3 space-y-2">
+        <p x-show="f.reach.detail.note" class="max-w-prose" x-text="f.reach.detail.note"></p>
+        <div x-show="(f.reach.detail.symbols || []).length" class="flex flex-wrap items-center gap-1.5">
+          <span class="text-xs font-semibold uppercase tracking-wide muted mr-1">Looked for</span>
+          <template x-for="s in f.reach.detail.symbols" :key="s"><code class="pill-slate font-mono" x-text="s"></code></template>
+        </div>
+        <ul x-show="(f.reach.detail.hits || []).length" class="space-y-1">
+          <template x-for="h in f.reach.detail.hits" :key="h.url">
+            <li><a :href="h.url" target="_blank" rel="noopener" class="code group flex items-center gap-2 px-3 py-2 font-mono text-[13px] text-slate-200">
+              <span class="shrink-0 text-slate-400" x-text="h.file + (h.line ? ':' + h.line : '')"></span><span class="truncate" x-text="h.text"></span>
+              {{ icon("external", "w-3.5 h-3.5 ml-auto shrink-0 text-slate-400") }}</a></li>
+          </template>
+        </ul>
+        <p class="text-[13px] muted">Text search is a strong hint, not proof. It lowers priority by one level when nothing is found.</p>
+      </div>
+    </template>
+  </section>
+
   <!-- web research -->
   <section class="card p-4">
     <div class="flex flex-wrap items-center gap-2">

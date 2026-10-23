@@ -1,5 +1,7 @@
-"""Start the VulnWatch dashboard: python run.py  (then open http://127.0.0.1:8000)"""
+"""Start the VulnWatch dashboard: python run.py  (then open http://127.0.0.1:8000; PORT=8001 python run.py for another port)"""
+import os
+
 import uvicorn
 
 if __name__ == "__main__":
-    uvicorn.run("app.web:app", host="127.0.0.1", port=8000)
+    uvicorn.run("app.web:app", host="127.0.0.1", port=int(os.environ.get("PORT", "8000")))

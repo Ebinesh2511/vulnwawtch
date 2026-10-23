@@ -3,7 +3,7 @@ import threading
 import time
 import traceback
 
-from . import ai, autofix, classify, db, evidence, feeds, inventory, mailer, matcher, research
+from . import ai, autofix, classify, db, evidence, feeds, inventory, mailer, matcher, reachability, research
 from . import config
 from .config import INTERVAL_MIN, SCHEDULER
 
@@ -24,7 +24,8 @@ STEPS_AFTER_MATCH = [
     lambda log: classify.run(log=log),      # priority first, so AI works P0 findings first
     lambda log: ai.run(log=log),
     lambda log: evidence.backfill(log=log),
-    lambda log: classify.run(log=log),      # again: AI verdicts change priority
+    lambda log: reachability.run(log=log),  # Go call graph + vulnerable-symbol search
+    lambda log: classify.run(log=log),      # again: AI verdicts and reachability change priority
     lambda log: research.run(log=log, limit=config.RESEARCH_MAX_PER_RUN),  # web research → fix decision
     lambda log: autofix.run(log=log),       # before mail, so alerts carry the PR / escalation status
     lambda log: mailer.run(log=log),
@@ -34,6 +35,7 @@ JOBS = {
     "ai": lambda log: (ai.run(log=log), evidence.backfill(log=log), classify.run(log=log)),
     "classify": lambda log: classify.run(log=log),
     "research": lambda log: research.run(log=log),
+    "reachability": lambda log: (reachability.run(log=log, force=True), classify.run(log=log)),
     "autofix": lambda log: autofix.run(log=log),
     "mail": lambda log: mailer.run(log=log),
     "pipeline": _pipeline,

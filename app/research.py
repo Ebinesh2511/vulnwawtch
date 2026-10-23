@@ -55,7 +55,15 @@ def _facts(f):
                    for e in f["evidence"][:8]) or "(no usage found by search)"
     vulns = "\n".join(f"- {v['id']} ({', '.join(v['aliases'])}) {v['severity']}{' EXPLOITED-IN-THE-WILD' if v['kev'] else ''}: "
                       f"{v['summary']} | fixed in: {', '.join(v['fixed']) or 'n/a'}" for v in f["vulns"][:15])
-    return (f"Repository: {f['repo']}\nLibrary: {f['package']} ({f['ecosystem']}), installed version(s): {', '.join(f['versions'])}\n"
+    rc = f.get("reach") or {}
+    reach = ""
+    if rc.get("method") == "govulncheck":
+        called = [k for k, v in rc["detail"].get("advisories", {}).items() if v["level"] == "called"]
+        reach = f"Go call graph (govulncheck): vulnerable code CALLED for {', '.join(called) or 'none'}; the rest are not reached.\n"
+    elif rc:
+        hits = "; ".join(f"{h['file']}:{h['line']} {h['text']}" for h in rc["detail"].get("hits", [])[:5])
+        reach = f"Reachability (symbol search): {rc['level']}. {rc['detail'].get('note', '')} {hits}\n"
+    return (reach + f"Repository: {f['repo']}\nLibrary: {f['package']} ({f['ecosystem']}), installed version(s): {', '.join(f['versions'])}\n"
             f"{'Only used in development/build tooling.' if f['dev_only'] else 'Shipped with the product.'}\n"
             f"Earlier triage: affected={f['affected']}; impact: {f['impact'] or 'n/a'}\n\n"
             f"<advisories count=\"{f['vuln_count']}\">\n{vulns}\n</advisories>\n\n<usage>\n{ev}\n</usage>\n")

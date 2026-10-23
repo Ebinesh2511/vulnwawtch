@@ -35,7 +35,10 @@ def build():
             "manifest": lead["manifest"], "status": status, "priority": lead["priority"] if lead["priority"] is not None else 3,
             "kev": any(i["kev"] for i in live), "dev_only": bool(lead["dev_only"]),
             "backlog": all(i["backlog"] for i in live), "ai_state": lead["ai_state"],
-            "confirmed": lead["ai_state"] == "done" and affected in ("yes", "maybe") and status in OPEN,
+            # every open advisory proven unreachable by the Go call graph -> not a confirmed finding
+            "unreachable": all(i.get("reach") in ("imported", "required", "not_affected") for i in live),
+            "confirmed": lead["ai_state"] == "done" and affected in ("yes", "maybe") and status in OPEN
+                         and not all(i.get("reach") in ("imported", "required", "not_affected") for i in live),
             "affected": affected, "confidence": t.get("confidence"),
             "problem": t.get("problem") or lead["summary"], "impact": t.get("impact"), "guard": t.get("guard_now"),
             "fix": t.get("fix"), "target": t.get("target_version") or (fixed[-1] if fixed else ""),
@@ -52,8 +55,18 @@ def build():
         })
     fixes = {(x["repo"], x["ecosystem"], x["package"]): x for x in db.q("SELECT * FROM fixes ORDER BY id")}
     res = {(x["repo"], x["ecosystem"], x["package"]): x for x in db.q("SELECT repo, ecosystem, package, decision, sources, created_at FROM research")}
+    rch = {(x["repo"], x["ecosystem"], x["package"]): x for x in db.q("SELECT * FROM reachability")}
     for f in out:
         x = fixes.get((f["repo"], f["ecosystem"], f["package"]))
+        rc = rch.get((f["repo"], f["ecosystem"], f["package"]))
+        if rc:
+            det = db.jl(rc["detail"], {})
+            if rc["method"] == "govulncheck":   # only the advisories in this finding, worst first
+                adv = {k: v for k, v in det.get("advisories", {}).items() if k in {x["id"] for x in f["vulns"]}}
+                det = {"advisories": dict(sorted(adv.items(), key=lambda kv: kv[1]["level"] != "called"))}
+            f["reach"] = {"method": rc["method"], "level": rc["level"], "detail": det, "at": rc["created_at"]}
+        else:
+            f["reach"] = None
         rr = res.get((f["repo"], f["ecosystem"], f["package"]))
         f["research"] = {"decision": db.jl(rr["decision"], {}), "sources": db.jl(rr["sources"]), "at": rr["created_at"]} if rr else None
         f["autofix"] = {k: x[k] for k in ("id", "kind", "status", "reason", "target", "branch", "files", "diff", "pr_url", "updated_at")} if x else None

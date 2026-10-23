@@ -99,3 +99,32 @@
   .btn, .input, .select, .tab { min-height: 44px; }
   .btn-icon { width: 44px; }
 }
+
+/* ---------- docs page ---------- */
+@layer components {
+  .doc { @apply text-[15px] leading-7; }
+  .doc > p:first-child { @apply mt-0 text-base; }
+  .doc h2 { @apply mt-10 border-t border-slate-200 pt-8 text-xl dark:border-slate-800; }
+  .doc h3 { @apply mt-8 text-base; }
+  .doc p, .doc ul, .doc ol { @apply max-w-[75ch]; }
+  .doc hr { @apply hidden; }   /* h2 already draws a top border */
+  .doc blockquote { @apply my-4 max-w-[75ch] rounded-lg border-l-4 border-blue-500 bg-blue-50 px-4 py-2 text-slate-800 dark:bg-blue-500/10 dark:text-slate-200; }
+  .doc blockquote p { @apply my-1; }
+  .doc table { @apply block w-full overflow-x-auto text-sm md:table; }
+  .doc th { @apply bg-slate-50 text-left font-semibold dark:bg-slate-800/60; }
+  .doc td, .doc th { @apply align-top; }
+  .doc li { @apply my-1; }
+  .doc pre { @apply text-[13px] leading-6; }
+  .doc-diagram { @apply my-5; }
+  .doc-diagram-box { @apply block w-full cursor-zoom-in overflow-x-auto rounded-xl bg-white p-4 ring-1 ring-slate-200 transition duration-[120ms]
+                             hover:ring-2 hover:ring-blue-500 dark:bg-slate-950 dark:ring-slate-800; }
+  .doc-diagram-box svg, [role=dialog] svg { max-width: 100%; height: auto; margin: 0 auto; }
+  /* diagram labels must not inherit the article's 15px / 1.75 text, Mermaid measured them at 14px / 1.5 */
+  .doc-diagram-box, [role=dialog] .doc-zoom { font-size: 14px; line-height: 1.5; }
+  .doc-diagram-box p, .doc-diagram-box span { margin: 0; max-width: none; line-height: 1.5; }
+}
+.scroll-target-doc { scroll-margin-top: calc(var(--header-h) + 16px); }
+
+/* UI icons (all carry .shrink-0) keep their inline position inside dialogs such as the vulnerability drawer,
+   where the docs diagram rule above would otherwise centre them */
+[role="dialog"] svg.shrink-0 { margin: 0; }
