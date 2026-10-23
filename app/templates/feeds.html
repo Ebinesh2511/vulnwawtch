@@ -2,88 +2,351 @@
 {% from "_ui.html" import icon, page_header %}
 {% block title %}Feeds{% endblock %}
 {% block content %}
-<div x-data="feeds()">
-  {% call page_header("Feeds", "Advisories and security news from the last " ~ cfg.FEED_DAYS ~ " days. Turn on “Affects my repos” to see only what matters here.") %}
-    <button @click="refresh()" class="btn-secondary">Refresh feeds</button>
+<div x-data="feeds()" @keydown.window="slash($event)">
+  {% call page_header("Feeds", "Every advisory and security news item from the last " ~ cfg.FEED_DAYS ~ " days, newest first.") %}
+    <span class="text-[13px] muted" x-show="synced" x-text="'Last synced ' + vw.ago(synced)"></span>
+    <button @click="refresh()" class="btn-secondary">{{ icon("loader") }} Refresh</button>
   {% endcall %}
 
-  <div class="mb-3 flex flex-wrap items-center gap-2">
-    <div class="relative min-w-[12rem] flex-1">
-      <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 muted">{{ icon("search") }}</span>
-      <label for="fq" class="sr-only">Search feeds</label>
-      <input id="fq" x-model.debounce.150ms="q" @input="limit = 50" placeholder="Search title, CVE, product…" class="input pl-9">
-    </div>
-    <label class="flex min-h-[40px] cursor-pointer items-center gap-3 rounded-lg px-3 ring-1 ring-slate-300 dark:ring-slate-700" :class="mine && 'bg-blue-50 ring-blue-500 dark:bg-blue-500/10'">
-      <input type="checkbox" class="checkbox" x-model="mine" @change="limit = 50">
-      <span>Affects my repos <span class="tabular-nums muted" x-text="'(' + rows.filter(r => r.repos.length).length + ')'"></span></span>
-    </label>
-  </div>
-  <div class="mb-4 flex flex-wrap items-center gap-2" role="group" aria-label="Severity">
-    <span class="muted mr-1">Severity</span>
-    <template x-for="s in ['KEV', 'CRITICAL', 'HIGH', 'MODERATE', 'LOW']" :key="s">
-      <button @click="toggleSev(s)" :aria-pressed="sev.includes(s)" class="min-h-[40px] rounded-md px-1 transition duration-[120ms]" :class="sev.includes(s) ? 'ring-2 ring-blue-500' : 'opacity-80 hover:opacity-100'">
-        <span :class="'sev-' + s" x-text="(s === 'KEV' ? 'Exploited' : s) + ' ' + rows.filter(r => r.sev === s).length"></span></button>
+  {# KPI strip doubles as quick scopes #}
+  <div class="mb-5 grid grid-cols-2 gap-2.5 lg:grid-cols-4" role="group" aria-label="Scope">
+    <template x-for="k in kpis" :key="k.v">
+      <button @click="setScope(k.v)" :aria-pressed="scope === k.v"
+              class="card px-3.5 py-2.5 text-left transition duration-[120ms] hover:ring-slate-400 dark:hover:ring-slate-600"
+              :class="scope === k.v && '!ring-2 !ring-blue-500'">
+        <b class="block text-xl tabular-nums" :class="k.tone" x-text="k.n"></b>
+        <span class="text-[13px] muted" x-text="k.label"></span>
+      </button>
     </template>
-    <label for="fsrc" class="sr-only">Source</label>
-    <select id="fsrc" x-model="src" @change="limit = 50" class="select ml-auto"><option value="">All sources</option>
-      <template x-for="s in sources" :key="s"><option :value="s" x-text="s"></option></template></select>
   </div>
 
-  <template x-for="g in groups" :key="g.day">
-    <section class="mb-5">
-      <h2 class="sticky top-14 z-10 -mx-4 bg-slate-50 px-4 py-2 font-semibold dark:bg-slate-950"><span x-text="g.label"></span> <span class="font-normal muted" x-text="'· ' + g.items.length"></span></h2>
-      <ul class="card divide-y divide-slate-100 dark:divide-slate-800">
-        <template x-for="f in g.items" :key="f.link + f.title">
-          <li class="grid gap-x-4 gap-y-1 px-4 py-3 sm:grid-cols-[7rem_1fr_auto]">
-            <div class="flex flex-wrap items-start gap-1.5">
-              <span x-show="f.sev" :class="'sev-' + f.sev" x-text="(f.sev === 'KEV' ? 'Exploited' : f.sev) + (f.score ? ' ' + f.score : '')"></span>
-            </div>
-            <div class="min-w-0">
-              <a :href="f.link" target="_blank" rel="noopener" class="group font-medium hover:underline" :aria-label="f.title + ' (opens in a new tab)'">
-                <span x-text="f.title"></span> <span class="inline-block align-middle opacity-0 transition group-hover:opacity-70">{{ icon("external", "w-3.5 h-3.5") }}</span></a>
-              <p x-show="f.summary && f.summary !== f.title" class="mt-0.5 line-clamp-2 muted" x-text="f.summary"></p>
-              <p class="mt-1 flex flex-wrap items-center gap-2 text-[13px] muted">
-                <span x-text="f.sources.join(', ')"></span>
-                <template x-if="f.ids.length"><span class="font-mono" :title="f.ids.join(', ')" x-text="f.ids[0] + (f.ids.length > 1 ? ' +' + (f.ids.length - 1) : '')"></span></template>
-                <template x-for="r in f.repos" :key="r"><a :href="'/?repo=' + r" class="pill-blue" x-text="'affects ' + r"></a></template>
-              </p>
-            </div>
-            <span class="whitespace-nowrap text-[13px] muted sm:text-right" :title="vw.local(f.date)" x-text="vw.ago(f.date)"></span>
-          </li>
+  <div class="grid gap-5 lg:grid-cols-[15rem_1fr]">
+    {# ---------- filters ---------- #}
+    <button @click="showF = !showF" :aria-expanded="showF" aria-controls="ffilters" class="btn-secondary justify-between lg:hidden">
+      <span class="flex items-center gap-2">{{ icon("sliders") }} Filters <span x-show="chips.length" class="pill-blue" x-text="chips.length"></span></span>
+      <span class="transition" :class="showF && 'rotate-180'">{{ icon("chevron") }}</span></button>
+    <aside id="ffilters" class="card h-fit space-y-4 p-3 lg:sticky lg:top-20 lg:block" :class="showF ? 'block' : 'hidden'" aria-label="Filters">
+      <div>
+        <h2 class="facet-h">Time</h2>
+        <div class="seg" role="group" aria-label="Time">
+          <button @click="time = '24h'; page = 1" :class="time === '24h' && 'seg-on'" :aria-pressed="time === '24h'">Last 24 h</button>
+          <button @click="time = 'all'; page = 1" :class="time === 'all' && 'seg-on'" :aria-pressed="time === 'all'">{{ cfg.FEED_DAYS }} days</button>
+        </div>
+      </div>
+      <template x-for="fc in facets" :key="fc.key">
+        <fieldset>
+          <legend class="facet-h" x-text="fc.title"></legend>
+          <template x-for="o in fc.opts" :key="o.v">
+            <label class="flex min-h-[32px] cursor-pointer items-center gap-2 rounded-md px-1.5 text-[13px] hover:bg-slate-100 dark:hover:bg-slate-800/60"
+                   :class="!o.n && !sel[fc.key].includes(o.v) && 'opacity-40'">
+              <input type="checkbox" class="checkbox" :checked="sel[fc.key].includes(o.v)" @change="toggle(fc.key, o.v)">
+              <span x-show="fc.key === 'sev'" class="h-2 w-2 rounded-full" :class="BAR[o.v]"></span>
+              <span class="truncate" x-text="o.label"></span>
+              <span class="ml-auto tabular-nums muted" x-text="o.n"></span>
+            </label>
+          </template>
+        </fieldset>
+      </template>
+    </aside>
+
+    {# ---------- results ---------- #}
+    <section class="min-w-0">
+      <div class="mb-2.5 flex flex-wrap items-center gap-2">
+        <div class="relative min-w-[13rem] flex-1">
+          <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 muted">{{ icon("search") }}</span>
+          <label for="fq" class="sr-only">Search feeds</label>
+          <input id="fq" x-ref="q" x-model.debounce.150ms="q" @input="page = 1" placeholder="Search title, CVE, package, repo…" class="input pl-9 pr-9">
+          <kbd class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border border-slate-300 px-1.5 text-[11px] muted dark:border-slate-700">/</kbd>
+        </div>
+        <label for="fsort" class="sr-only">Sort</label>
+        <select id="fsort" x-model="sort" @change="page = 1" class="select">
+          <option value="new">Newest first</option><option value="sev">Severity (CVSS)</option><option value="repos">Most repos affected</option></select>
+        <div class="seg" role="group" aria-label="View">
+          <button @click="setPref('view', 'list')" :class="view === 'list' && 'seg-on'" :aria-pressed="view === 'list'">List</button>
+          <button @click="setPref('view', 'group')" :class="view === 'group' && 'seg-on'" :aria-pressed="view === 'group'">By package</button>
+        </div>
+        <div class="seg hidden sm:flex" role="group" aria-label="Density">
+          <button @click="setPref('dense', false)" :class="!dense && 'seg-on'" :aria-pressed="!dense">Comfy</button>
+          <button @click="setPref('dense', true)" :class="dense && 'seg-on'" :aria-pressed="dense">Compact</button>
+        </div>
+      </div>
+
+      {# active filter chips #}
+      <div class="mb-2.5 flex min-h-[28px] flex-wrap items-center gap-1.5">
+        <template x-for="c in chips" :key="c.k + c.v">
+          <span class="inline-flex items-center gap-1 rounded-full bg-blue-50 py-0.5 pl-2.5 pr-1 text-xs text-blue-800 ring-1 ring-blue-600/20 dark:bg-blue-500/10 dark:text-blue-200 dark:ring-blue-500/30">
+            <span x-text="c.label"></span>
+            <button @click="unchip(c)" class="grid h-5 w-5 place-items-center rounded-full hover:bg-blue-100 dark:hover:bg-blue-500/20" :aria-label="'Remove filter ' + c.label">{{ icon("x", "w-3 h-3") }}</button>
+          </span>
         </template>
-      </ul>
+        <button x-show="chips.length" @click="clearAll()" class="px-1 text-xs text-blue-700 hover:underline dark:text-blue-300">Clear all</button>
+        <span class="ml-auto text-xs tabular-nums muted" x-text="vw.plural(filtered.length, 'result')"></span>
+      </div>
+
+      {# list view: rows grouped by day when newest-first #}
+      <template x-if="view === 'list'">
+        <div>
+          <template x-for="(g, gi) in dayGroups" :key="gi + g.label">
+            <div>
+              <h2 x-show="g.label" class="mb-1.5 mt-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider muted first:mt-0">
+                <span x-text="g.label"></span><span class="h-px flex-1 bg-slate-200 dark:bg-slate-800"></span></h2>
+              <ul class="card divide-y divide-slate-100 overflow-hidden dark:divide-slate-800" x-effect="fill($el, g.items)"></ul>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      {# grouped view #}
+      <template x-if="view === 'group'">
+        <div class="card divide-y divide-slate-100 overflow-hidden dark:divide-slate-800">
+          <template x-for="g in pkgGroups.slice((page - 1) * per, page * per)" :key="g.key">
+            <div>
+              <button @click="openG[g.key] = !openG[g.key]" :aria-expanded="!!openG[g.key]"
+                      class="flex w-full flex-wrap items-center gap-2.5 bg-slate-50 px-4 py-2.5 text-left hover:bg-slate-100 dark:bg-slate-900/60 dark:hover:bg-slate-800/60">
+                <span class="transition" :class="!openG[g.key] && '-rotate-90'">{{ icon("chevron") }}</span>
+                <span class="pkg-chip" x-text="g.key"></span>
+                <span class="flex gap-1">
+                  <template x-for="s in SEVS" :key="s"><span x-show="g.sev[s]" :class="'sev-' + s" x-text="g.sev[s] + ' ' + s[0]"></span></template>
+                </span>
+                <span class="text-[13px] muted" x-text="vw.plural(g.items.length, 'advisory', 'advisories') + ' · ' + vw.plural(g.repos, 'repo')"></span>
+              </button>
+              <template x-if="openG[g.key]">
+                <ul class="divide-y divide-slate-100 border-t border-slate-100 dark:divide-slate-800 dark:border-slate-800" x-effect="fill($el, g.items)"></ul>
+              </template>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <div x-show="!filtered.length" class="card p-10 text-center muted">No advisories match these filters.
+        <button @click="clearAll()" class="text-blue-700 hover:underline dark:text-blue-300">Clear filters</button></div>
+
+      {# pagination #}
+      <nav x-show="pages > 1 || filtered.length > 10" class="mt-4 flex flex-wrap items-center justify-center gap-1.5" aria-label="Pages">
+        <button @click="go(page - 1)" :disabled="page === 1" class="pager-btn" aria-label="Previous page">‹</button>
+        <template x-for="(p, i) in pageList" :key="i">
+          <span>
+            <button x-show="p" @click="go(p)" class="pager-btn" :class="p === page && 'pager-on'" :aria-current="p === page ? 'page' : null" x-text="p"></button>
+            <span x-show="!p" class="px-1 muted" aria-hidden="true">…</span>
+          </span>
+        </template>
+        <button @click="go(page + 1)" :disabled="page === pages" class="pager-btn" aria-label="Next page">›</button>
+        <span class="ml-2 text-xs tabular-nums muted" x-text="rangeText"></span>
+        <label for="fper" class="sr-only">Per page</label>
+        <select id="fper" :value="per" @change="setPref('per', +$event.target.value)" class="select !min-h-[32px] !py-0 text-xs">
+          <option value="10">10</option><option value="25">25</option><option value="50">50</option></select>
+      </nav>
     </section>
-  </template>
-  <div x-show="!filtered.length" class="card p-10 text-center muted">Nothing matches these filters.</div>
-  <div x-show="filtered.length > limit" class="text-center">
-    <button @click="limit += 50" class="btn-secondary" x-text="'Show more (' + (filtered.length - limit) + ' left)'"></button></div>
+  </div>
 </div>
 
 <script>
 function feeds() {
+  const store = (k, v) => { try { if (v === undefined) return JSON.parse(localStorage.getItem("vw-feeds-" + k)); localStorage.setItem("vw-feeds-" + k, JSON.stringify(v)); } catch (e) { return null; } };
+  const SEVS = ["CRITICAL", "HIGH", "MODERATE", "LOW", "UNRATED"];
+  const RANK = { CRITICAL: 9.5, HIGH: 7.5, MODERATE: 5, LOW: 2, UNRATED: 0 };
+  const KIND = { cve: "CVE (NVD)", vendor: "Vendor advisory", exploit: "Public exploit", news: "News", npm: "npm", pip: "pip (PyPI)",
+                 go: "Go", maven: "Maven", rust: "Rust", composer: "Composer", rubygems: "RubyGems", nuget: "NuGet" };
+  // per-row UI state stays outside Alpine's reactivity, so opening a row doesn't rebuild the list
+  const open = {}, checks = {}, read = {};
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   return {
-    rows: {{ rows|tojson }}, q: "", mine: false, sev: [], src: "", limit: 50,
-    get sources() { return [...new Set(this.rows.flatMap(r => r.sources))].sort(); },
-    toggleSev(s) { this.sev = this.sev.includes(s) ? this.sev.filter(x => x !== s) : [...this.sev, s]; this.limit = 50; },
-    get filtered() {
-      const q = this.q.toLowerCase();
-      return this.rows.filter(r => (!this.mine || r.repos.length) && (!this.sev.length || this.sev.includes(r.sev))
-        && (!this.src || r.sources.includes(this.src)) && (!q || [r.title, r.summary, ...r.ids].join(" ").toLowerCase().includes(q)));
+    rows: {{ rows|tojson }}, synced: {{ synced|tojson }},
+    SEVS, BAR: { CRITICAL: "bg-red-500", HIGH: "bg-orange-500", MODERATE: "bg-amber-400", LOW: "bg-slate-400", UNRATED: "bg-slate-300 dark:bg-slate-700" },
+    scope: "all", sel: { sev: [], kind: [], src: [] }, q: "", time: "all", sort: "new",
+    view: store("view") || "list", dense: !!store("dense"), per: store("per") || 25, page: 1,
+    openG: {}, showF: false, seenAt: store("seen") || "",
+
+    init() { store("seen", new Date().toISOString()); },   // next visit: items newer than now are "new"
+    fill(ul, items) { ul.replaceChildren(...items.map(f => this.row(f))); },
+    slash(e) { if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); this.$refs.q.focus(); } },
+    setPref(k, v) { this[k] = v; this.page = 1; store(k, v); },
+    setScope(v) { this.scope = this.scope === v && v !== "all" ? "all" : v; this.page = 1; },
+    toggle(k, v) { const a = this.sel[k]; this.sel[k] = a.includes(v) ? a.filter(x => x !== v) : [...a, v]; this.page = 1; },
+    clearAll() { this.scope = "all"; this.sel = { sev: [], kind: [], src: [] }; this.q = ""; this.time = "all"; this.page = 1; },
+    unchip(c) { if (c.k === "scope") this.scope = "all"; else if (c.k === "q") this.q = ""; else if (c.k === "time") this.time = "all"; else this.toggle(c.k, c.v); },
+
+    // ---------- filtering: facet counts use every OTHER filter, so the numbers always add up ----------
+    match(r, skip) {
+      const live = r.repos.some(x => x.status === "open" || x.status === "in_progress");
+      if (this.scope === "mine" && !live) return false;
+      if (this.scope === "crit" && !(live && r.sev === "CRITICAL")) return false;
+      if (this.scope === "kev" && !r.kev) return false;
+      if (skip !== "sev" && this.sel.sev.length && !this.sel.sev.includes(r.sev)) return false;
+      if (skip !== "kind" && this.sel.kind.length && !this.sel.kind.includes(r.kind)) return false;
+      if (skip !== "src" && this.sel.src.length && !r.sources.some(s => this.sel.src.includes(s))) return false;
+      if (this.time === "24h" && (!r.date || Date.now() - new Date(r.date) > 864e5)) return false;
+      if (this.q) {
+        const h = [r.title, r.summary, r.pkg, r.eco, ...r.ids, ...r.sources, ...r.repos.map(x => x.name)].join(" ").toLowerCase();
+        if (!this.q.toLowerCase().split(/\s+/).every(w => h.includes(w))) return false;
+      }
+      return true;
     },
-    get groups() {
-      const out = [], today = new Date().toDateString(), yest = new Date(Date.now() - 864e5).toDateString();
-      for (const r of this.filtered.slice(0, this.limit)) {
-        const d = r.date ? new Date(r.date) : null, day = d ? d.toDateString() : "Undated";
-        let g = out.at(-1);
-        if (!g || g.day !== day) out.push(g = { day, items: [],
-          label: day === today ? "Today" : day === yest ? "Yesterday" : (d ? d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" }) : day) });
-        g.items.push(r);
+    get kpis() {
+      const live = r => r.repos.some(x => x.status === "open" || x.status === "in_progress");
+      return [
+        { v: "all", label: "All advisories", n: this.rows.length, tone: "" },
+        { v: "mine", label: "Affect my repos", n: this.rows.filter(live).length, tone: "text-blue-700 dark:text-blue-300" },
+        { v: "crit", label: "Critical in my repos", n: this.rows.filter(r => live(r) && r.sev === "CRITICAL").length, tone: "text-red-700 dark:text-red-300" },
+        { v: "kev", label: "Known exploited", n: this.rows.filter(r => r.kev).length, tone: "text-red-700 dark:text-red-300" },
+      ];
+    },
+    get facets() {
+      const opts = (key, vals, label, has) => vals.map(v => ({ v, label: label(v), n: this.rows.filter(r => this.match(r, key) && has(r, v)).length }));
+      const kinds = [...new Set(this.rows.map(r => r.kind))].sort((a, b) => this.rows.filter(r => r.kind === b).length - this.rows.filter(r => r.kind === a).length);
+      const srcs = [...new Set(this.rows.flatMap(r => r.sources))].sort();
+      return [
+        { key: "sev", title: "Severity", opts: opts("sev", SEVS, v => v[0] + v.slice(1).toLowerCase(), (r, v) => r.sev === v) },
+        { key: "kind", title: "Type", opts: opts("kind", kinds, v => KIND[v] || v, (r, v) => r.kind === v) },
+        { key: "src", title: "Source", opts: opts("src", srcs, v => v, (r, v) => r.sources.includes(v)) },
+      ];
+    },
+    get chips() {
+      const out = [];
+      if (this.scope !== "all") out.push({ k: "scope", v: this.scope, label: { mine: "Affects my repos", crit: "Critical in my repos", kev: "Known exploited" }[this.scope] });
+      if (this.time === "24h") out.push({ k: "time", v: "24h", label: "Last 24 h" });
+      for (const k of ["sev", "kind", "src"]) for (const v of this.sel[k]) out.push({ k, v, label: k === "kind" ? (KIND[v] || v) : k === "sev" ? v[0] + v.slice(1).toLowerCase() : v });
+      if (this.q) out.push({ k: "q", v: this.q, label: `“${this.q}”` });
+      return out;
+    },
+    get filtered() {
+      const out = this.rows.filter(r => this.match(r));
+      const score = r => +r.score || RANK[r.sev];
+      if (this.sort === "new") out.sort((a, b) => (b.date ? Date.parse(b.date) : 0) - (a.date ? Date.parse(a.date) : 0));
+      if (this.sort === "sev") out.sort((a, b) => score(b) - score(a) || b.kev - a.kev);
+      if (this.sort === "repos") out.sort((a, b) => b.repos.length - a.repos.length || score(b) - score(a));
+      return out;
+    },
+
+    // ---------- views + paging ----------
+    get pages() { return Math.max(1, Math.ceil((this.view === "group" ? this.pkgGroups.length : this.filtered.length) / this.per)); },
+    get pageList() {
+      const n = this.pages, p = Math.min(this.page, n), out = [];
+      for (let i = 1; i <= n; i++) {
+        if (n > 7 && i > 2 && i < n - 1 && Math.abs(i - p) > 1) { if (out.at(-1) !== 0) out.push(0); continue; }
+        out.push(i);
       }
       return out;
     },
+    get rangeText() {
+      const total = this.view === "group" ? this.pkgGroups.length : this.filtered.length;
+      const a = (this.page - 1) * this.per + 1, b = Math.min(this.page * this.per, total);
+      return total ? `${a}–${b} of ${total} ${this.view === "group" ? "groups" : "items"}` : "";
+    },
+    go(p) { this.page = Math.min(Math.max(1, p), this.pages); window.scrollTo({ top: 0, behavior: "smooth" }); },
+    get dayGroups() {
+      const slice = this.filtered.slice((this.page - 1) * this.per, this.page * this.per);
+      if (this.sort !== "new") return [{ label: "", items: slice }];
+      const out = [], today = new Date().toDateString(), yest = new Date(Date.now() - 864e5).toDateString();
+      for (const r of slice) {
+        const d = r.date ? new Date(r.date) : null, day = d ? d.toDateString() : "Undated";
+        const label = day === today ? "Today" : day === yest ? "Yesterday" : d ? d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" }) : day;
+        if (!out.length || out.at(-1).label !== label) out.push({ label, items: [] });
+        out.at(-1).items.push(r);
+      }
+      return out;
+    },
+    get pkgGroups() {
+      const g = {};
+      for (const r of this.filtered) { const k = r.pkg ? `${r.eco}/${r.pkg.split(" +")[0].toLowerCase()}` : r.sources[0] || "Other"; (g[k] = g[k] || []).push(r); }
+      return Object.entries(g).map(([key, items]) => ({
+        key, items, repos: new Set(items.flatMap(r => r.repos.map(x => x.name))).size,
+        sev: Object.fromEntries(SEVS.map(s => [s, items.filter(r => r.sev === s).length])),
+      })).sort((a, b) => b.repos - a.repos || b.items.length - a.items.length);
+    },
+
+    // ---------- one row, built as a DOM node (hundreds of rows: cheaper than nested Alpine templates) ----------
+    row(f) {
+      const li = document.createElement("li");
+      li.className = "feed-row" + (this.dense ? " feed-dense" : "") + (open[f.key] ? " is-open" : "");
+      li.dataset.key = f.key;
+      const unread = this.seenAt && f.date && f.date > this.seenAt && !read[f.key];
+      const live = f.repos.filter(x => x.status === "open" || x.status === "in_progress");
+      const fixed = [...new Set(f.repos.flatMap(x => x.fixed || []))];
+      li.innerHTML = `
+        <div class="feed-bar ${this.BAR[f.sev]}" aria-hidden="true"></div>
+        <div class="flex flex-col items-start gap-1">
+          <span class="sev-${f.sev}">${f.sev === "UNRATED" ? "Unrated" : f.sev}</span>
+          ${f.score ? `<span class="text-[11px] tabular-nums muted">CVSS ${esc(f.score)}</span>` : ""}
+          ${f.kev ? `<span class="rounded bg-red-600 px-1.5 text-[10px] font-bold text-white">EXPLOITED</span>` : ""}
+        </div>
+        <div class="min-w-0">
+          <div class="flex min-w-0 items-center gap-2">
+            ${unread ? `<span class="h-2 w-2 shrink-0 rounded-full bg-blue-500" title="New since your last visit"></span>` : ""}
+            ${f.pkg ? `<span class="pkg-chip">${esc(f.pkg)}</span>` : ""}
+            <button type="button" class="feed-title truncate text-left font-medium" aria-expanded="${!!open[f.key]}">${esc(f.title)}</button>
+          </div>
+          <div class="feed-meta mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs muted">
+            <span class="uppercase tracking-wide">${esc(KIND[f.kind] || f.kind)}</span>
+            <span>${esc(f.sources.join(", "))}</span>
+            ${f.ids.length ? `<span class="font-mono" title="${esc(f.ids.join(", "))}">${esc(f.ids[0])}${f.ids.length > 1 ? " +" + (f.ids.length - 1) : ""}</span>` : ""}
+            ${live.length ? `<span class="font-medium text-blue-700 dark:text-blue-300">⬢ ${live.length === 1 ? esc(live[0].name) : live.length + " repos"}</span>`
+                          : f.repos.length ? `<span class="text-emerald-700 dark:text-emerald-300">resolved in ${f.repos.length === 1 ? esc(f.repos[0].name) : f.repos.length + " repos"}</span>` : ""}
+            ${fixed.length ? `<span>fix → <b class="text-emerald-700 dark:text-emerald-300">${esc(fixed.join(", "))}</b></span>` : ""}
+          </div>
+        </div>
+        <div class="feed-right">
+          <span class="text-xs tabular-nums muted" title="${esc(f.date ? vw.local(f.date) : "")}">${f.date ? esc(vw.ago(f.date)) : ""}</span>
+          <div class="feed-actions flex gap-1.5">
+            ${f.pkg ? `<button type="button" class="btn-secondary !min-h-[28px] !px-2 text-xs" data-act="check">Check repos</button>` : ""}
+            ${f.link ? `<a href="${esc(f.link)}" target="_blank" rel="noopener" class="btn-secondary !min-h-[28px] !px-2 text-xs" aria-label="Open the advisory (new tab)">{{ icon("external", "w-3.5 h-3.5") }}</a>` : ""}
+          </div>
+        </div>
+        <div class="feed-detail">${this.detail(f)}</div>`;
+      li.addEventListener("click", e => {
+        if (e.target.closest("a")) return;
+        const act = e.target.closest("[data-act]");
+        if (act) { e.stopPropagation(); this.check(f, li); return; }
+        if (e.target.closest(".feed-detail")) return;
+        open[f.key] = !open[f.key]; read[f.key] = true;
+        li.classList.toggle("is-open", open[f.key]);
+        li.querySelector(".feed-title").setAttribute("aria-expanded", open[f.key]);
+        li.querySelector(".bg-blue-500.rounded-full")?.remove();
+      });
+      return li;
+    },
+    detail(f) {
+      const c = checks[f.key];
+      const chip = (cls, text, href) => href ? `<a href="${href}" class="${cls} hover:underline">${esc(text)}</a>` : `<span class="${cls}">${esc(text)}</span>`;
+      const STATUS = { open: "affected", in_progress: "fix in progress", fixed: "fixed", ignored: "ignored", not_affected: "not affected" };
+      let repos = f.repos.map(x => chip(x.status === "open" || x.status === "in_progress" ? "pill-red" : x.status === "fixed" ? "pill-green" : "pill-slate",
+        `${x.name} · ${STATUS[x.status] || x.status}${x.priority != null && (x.status === "open" || x.status === "in_progress") ? " · P" + x.priority : ""}`, "/?repo=" + encodeURIComponent(x.name))).join("");
+      if (c && c.repos) repos += c.repos.filter(x => !f.repos.some(y => y.name === x.name))
+        .map(x => chip(x.vulnerable ? "pill-red" : "pill-green", `${x.name} · ${x.version} · ${x.vulnerable ? "vulnerable" : "not affected"}`)).join("");
+      const note = c ? (c.loading ? "Checking locked versions against OSV…" : c.error ? c.error
+        : c.repos.length ? this.checkNote(f, c) : esc(c.note)) : "";
+      return `
+        <div class="mt-3 grid gap-2 sm:grid-cols-3">
+          <div class="feed-fact"><small>Published</small>${f.date ? esc(vw.local(f.date)) : "—"}</div>
+          <div class="feed-fact"><small>IDs</small><span class="font-mono text-xs">${esc(f.ids.join(", ") || "—")}</span></div>
+          <div class="feed-fact"><small>Source</small>${esc(f.sources.join(", "))}</div>
+        </div>
+        ${f.summary && f.summary !== f.title ? `<p class="mt-2 max-w-[75ch] text-slate-700 dark:text-slate-300">${esc(f.summary)}</p>` : ""}
+        <div class="mt-2"><small class="text-[11px] font-semibold uppercase tracking-wider muted">Repo status</small>
+          <div class="mt-1 flex flex-wrap gap-1.5">${repos || (c ? "" : `<span class="pill-slate">${f.pkg ? "No match from the last scan. Click “Check repos” to look now." : "No match in your repos."}</span>`)}</div>
+          ${note ? `<p class="mt-1.5 text-xs muted">${note}</p>` : ""}</div>`;
+    },
+    checkNote(f, c) {
+      const bad = c.repos.filter(x => x.vulnerable), fresh = bad.filter(x => !f.repos.some(y => y.name === x.name));
+      if (!bad.length) return `Checked ${vw.plural(c.repos.length, "repo")} that use ${esc(f.pkg)}: none is on an affected version.`;
+      return `<b class="text-red-700 dark:text-red-300">${bad.length} on an affected version</b> · `
+        + (fresh.length ? `${fresh.length} not yet a finding; the next full check adds ${fresh.length === 1 ? "it" : "them"}.` : "all already tracked as findings.");
+    },
+    async check(f, li) {
+      open[f.key] = true; li.classList.add("is-open");
+      checks[f.key] = { loading: true };
+      li.querySelector(".feed-detail").innerHTML = this.detail(f);
+      try {
+        const r = await fetch("/api/feeds/check", { method: "POST", body: new URLSearchParams({ key: f.key }) });
+        const d = await r.json();
+        checks[f.key] = r.ok ? d : { error: d.error || "Check failed." };
+      } catch (e) { checks[f.key] = { error: "Check failed: network error." }; }
+      li.querySelector(".feed-detail").innerHTML = this.detail(f);
+    },
+
     async refresh() {
       const r = await vw.post("/api/run/feeds");
-      vw.toast(r.started ? "Fetching feeds… the page refreshes when done." : "A job is already running.", { kind: r.started ? "ok" : "info" });
+      vw.toast(r.started ? "Fetching feeds… the page refreshes when done." : "A feed refresh is already queued or running.", { kind: r.started ? "ok" : "info" });
       if (r.started) window.addEventListener("vw-refresh", () => location.reload(), { once: true });
     },
   };

@@ -3,7 +3,7 @@ module.exports = {
   darkMode: "class",
   content: ["../app/templates/**/*.html", "../app/static/vw.js"],
   // built in JS as "sev-" + severity, so Tailwind cannot see them in the source
-  safelist: ["sev-CRITICAL", "sev-KEV", "sev-HIGH", "sev-MODERATE", "sev-MEDIUM", "sev-LOW", "sev-UNKNOWN", "sev-"],
+  safelist: ["sev-CRITICAL", "sev-KEV", "sev-HIGH", "sev-MODERATE", "sev-MEDIUM", "sev-LOW", "sev-UNKNOWN", "sev-UNRATED", "sev-"],
   theme: {
     extend: {
       fontFamily: {

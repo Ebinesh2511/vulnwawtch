@@ -40,6 +40,10 @@
               {{ icon("alert") }} <span class="flex-1">This run never reported back. Its process probably stopped (for example the app was restarted).</span>
               <button @click="markFailed(r)" class="btn-secondary">Mark as failed</button>
             </div>
+            <div x-show="r.state === 'running'" class="flex flex-wrap items-center gap-3">
+              <span class="flex-1 muted">Still running. Stopping keeps everything it already finished.</span>
+              <button @click="stopRun(r)" class="btn-secondary">Stop this run</button>
+            </div>
             <ul x-show="r.summary.length" class="space-y-1">
               <template x-for="s in r.summary" :key="s"><li class="flex gap-2"><span class="text-emerald-600 dark:text-emerald-400">{{ icon("check") }}</span><span x-text="s"></span></li></template>
             </ul>
@@ -59,13 +63,17 @@
 function runs() {
   return {
     rows: {{ rows|tojson }}, type: "all", failedOnly: false,
-    STATE: { ok: ["OK", "pill-green"], failed: ["Failed", "pill-red"], running: ["Running", "pill-blue"], stale: ["Stalled", "pill-amber"] },
+    STATE: { ok: ["OK", "pill-green"], failed: ["Failed", "pill-red"], running: ["Running", "pill-blue"], stale: ["Stalled", "pill-amber"], stopped: ["Stopped", "pill-slate"] },
     get types() { return [...new Set(this.rows.map(r => r.type))]; },
     get list() { return this.rows.filter(r => (this.type === "all" || r.type === this.type) && (!this.failedOnly || ["failed", "stale"].includes(r.state) || r.counts.ERROR)); },
     async markFailed(r) {
       await vw.post(`/api/runs/${r.id}/fail`);
       r.state = "failed"; r.finished = new Date().toISOString();
       vw.toast("Run marked as failed", { kind: "ok" });
+    },
+    async stopRun(r) {
+      const d = await vw.post(`/api/job/stop?rid=${r.id}`);
+      vw.toast(d.stopping ? `Stopping ${r.job} after its current item…` : "It already finished.", { kind: "info" });
     },
   };
 }

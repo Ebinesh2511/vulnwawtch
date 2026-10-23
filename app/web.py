@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 
-from . import ai, ai_usage, autofix, checker, classify, config, db, findings, gh, github_auth, github_events, jobs, mailer, research, settings
+from . import ai, ai_usage, autofix, checker, classify, config, db, findings, gh, github_auth, github_events, jobs, mailer, osv, research, settings
 
 EMAIL_RE = re.compile(r"[^@\s,;]+@[^@\s,;]+\.[A-Za-z]{2,}")
 HERE = Path(__file__).parent
@@ -26,7 +26,7 @@ tpl.env.filters["jl"] = db.jl
 # CommonMark handles lists and code blocks inside list items; html=False escapes any raw HTML in AI output
 _md = MarkdownIt("commonmark", {"html": False}).enable("table")
 tpl.env.filters["md"] = lambda s: _md.render(s or "")
-tpl.env.globals.update(cfg=config, jobs=jobs.state,
+tpl.env.globals.update(cfg=config,
                        # cache-buster: changes whenever the CSS/JS is rebuilt, no restart needed
                        asset_v=lambda: int(max((HERE / "static" / f).stat().st_mtime for f in ("app.css", "vw.js"))),
                        rules_missing=lambda: not db.one("SELECT 1 FROM rules LIMIT 1"))
@@ -59,7 +59,7 @@ def dashboard(request: Request):
 @app.get("/api/findings")
 def api_findings():
     last = db.one("SELECT job, finished, ok FROM runs WHERE finished IS NOT NULL ORDER BY id DESC LIMIT 1")
-    return {"findings": findings.build(), "job": jobs.state["job"], "last_run": last,
+    return {"findings": findings.build(), "job": jobs.status()["label"], "last_run": last,
             "autofix_mode": config.AUTOFIX_MODE,
             "repos": db.one("SELECT count(*) n FROM repos WHERE tracked=1")["n"],
             "libraries": db.one(f"SELECT count(DISTINCT ecosystem||name) n FROM deps WHERE {db.TRACKED}")["n"]}
@@ -80,10 +80,7 @@ def api_research(iid: int):
 
 @app.post("/api/findings/{iid}/research")
 def api_research_run(iid: int):
-    def work(log):
-        f = next(f for f in findings.build() if iid in f["ids"])
-        research.research(f, log=log, force=True)
-    return {"started": jobs.run(f"research #{iid}", work)}
+    return {"started": jobs.submit(f"research #{iid}", "research_one", iid)}
 
 
 @app.post("/api/findings/{iid}/status")
@@ -97,7 +94,7 @@ def api_status(iid: int, status: str = Form(...)):
 
 @app.post("/api/findings/{iid}/fix")
 def api_fix(iid: int):
-    return {"started": jobs.run(f"fix #{iid}", lambda log: autofix.fix_one(iid, log=log))}
+    return {"started": jobs.submit(f"fix #{iid}", "fix_one", iid)}
 
 
 @app.post("/api/findings/{iid}/pr")
@@ -105,12 +102,12 @@ def api_pr(iid: int):
     """Open the PR for a prepared fix. Only allowed in AUTOFIX_MODE=pr."""
     if config.AUTOFIX_MODE != "pr":
         return JSONResponse({"error": "Pull requests are off. Set AUTOFIX_MODE=pr in .env and restart."}, 400)
-    return {"started": jobs.run(f"pr #{iid}", lambda log: autofix.fix_one(iid, log=log, open_pr=True))}
+    return {"started": jobs.submit(f"pr #{iid}", "pr_one", iid)}
 
 
 @app.post("/api/findings/{iid}/analyze")
 def api_analyze(iid: int):
-    return {"started": jobs.run(f"ai #{iid}", lambda log: (ai.analyze_issue(iid, log=log), classify.run(log=log)))}
+    return {"started": jobs.submit(f"ai #{iid}", "ai_one", iid)}
 
 
 # ---------- all vulnerabilities ----------
@@ -217,7 +214,7 @@ def github_setup(request: Request, installation_id: int = 0, setup_action: str =
     account = inst["account"]["login"]
     ours = account.lower() == config.ORG.lower()
     if ours:
-        jobs.run("repos")
+        jobs.submit("repos")
     resp = RedirectResponse(f"/repos?gh={'installed' if ours else 'other'}&account={account}", status_code=303)
     resp.delete_cookie("vw_gh_state")
     return resp
@@ -235,7 +232,7 @@ async def github_webhook(request: Request):
     db.x("INSERT INTO runs(job, started, finished, log, ok) VALUES(?,?,?,?,1)",
          f"webhook {event}", db.now(), db.now(), summary)
     if sync:
-        jobs.run("repos")
+        jobs.submit("repos")
     return {"ok": True, "summary": summary}
 
 
@@ -337,37 +334,103 @@ def mail_send_all():
     if not mailer.smtp_ready():
         return {"started": False}
     ids = [r["id"] for r in db.q("SELECT id FROM mails WHERE status IN ('preview','error')")]
-    return {"started": jobs.run("mail send", lambda log: log(f"sent {sum(mailer.deliver(i) for i in ids)}/{len(ids)}"))}
+    return {"started": jobs.submit("mail send", "mail_send", ids)}
 
 
 # ---------- feeds ----------
 
 SEV_IN_TITLE = re.compile(r"\s*\((CRITICAL|HIGH|MEDIUM|MODERATE|LOW)(?:\s+([\d.]+))?\)\s*:?", re.I)
+ID_PREFIX = re.compile(r"^(?:CVE-\d{4}-\d+|GHSA(?:-[0-9a-z]{4}){3})\s*", re.I)
+GHSA_PKGS = re.compile(r"^((?:[\w.-]+/[^\s,:]+)(?:,\s*[\w.-]+/[^\s,:]+)*):\s*")
+# GitHub advisory ecosystems -> OSV ecosystems used in deps
+GH_ECO = {"pip": "PyPI", "npm": "npm", "go": "Go", "rubygems": "RubyGems", "composer": "Packagist",
+          "maven": "Maven", "nuget": "NuGet", "rust": "crates.io", "pub": "Pub", "swift": "SwiftURL"}
+NEWS = {"The Hacker News", "BleepingComputer", "Securelist", "Aikido Blog", "SANS ISC", "0dayfans",
+        "Aikido: Vulnerabilities & Threats"}
+
+
+def _kind(sources, eco):
+    """What sort of item this is, for the Type filter."""
+    if eco:
+        return eco
+    if any(s.startswith("NVD") for s in sources):
+        return "cve"
+    if "Exploit-DB" in sources:
+        return "exploit"
+    if set(sources) <= NEWS:
+        return "news"
+    return "vendor"
+
+
+def feed_rows():
+    # issue rows per advisory id (tracked repos only): repo -> state, for the repo chips
+    touch = {}
+    for i in db.q(f"SELECT vuln_id, aliases, repo, status, priority, fixed_versions FROM issues WHERE {db.TRACKED}"):
+        for a in {i["vuln_id"].upper(), *(x.upper() for x in db.jl(i["aliases"]))}:
+            touch.setdefault(a, {})[i["repo"]] = {"status": i["status"], "priority": i["priority"],
+                                                  "fixed": db.jl(i["fixed_versions"])}
+    rows = []
+    for f in db.q("SELECT * FROM feed_items ORDER BY date DESC LIMIT 1500"):
+        title, sev_col = f["title"], (f["severity"] or "").split(" ")
+        sev, score = sev_col[0].upper(), (sev_col[1] if len(sev_col) > 1 else None)
+        m = SEV_IN_TITLE.search(title)
+        if m:
+            sev, score = m.group(1).upper(), m.group(2) or score
+            title = (title[:m.start()] + " " + title[m.end():]).strip()
+        title = ID_PREFIX.sub("", re.sub(r"^\[KEV\]\s*", "", title)).strip(" :")
+        eco = pkg = ""
+        pm = GHSA_PKGS.match(title)
+        if pm:
+            first = pm.group(1).split(",")[0].strip()
+            eco, pkg = first.split("/", 1)
+            title = title[pm.end():]
+            more = pm.group(1).count(",")
+            title = re.sub(rf"^{re.escape(pkg)}:\s*", "", title, flags=re.I)   # "pillow: Pillow: ..." -> "..."
+            pkg += f" +{more}" if more else ""
+        ids = db.jl(f["ids"])
+        sources = db.jl(f["sources"])
+        repos = {}
+        for i in ids:
+            repos.update(touch.get(i.upper(), {}))
+        rows.append({"key": f["key"], "title": title or f["title"], "link": f["link"], "date": f["date"],
+                     "summary": re.sub(r"^\s*(?:Summary|Description|Overview)\s+", "", re.sub(r"[#*`>_]+", "", f["summary"] or ""), flags=re.I)[:400], "ids": ids,
+                     "sources": sources, "sev": {"MEDIUM": "MODERATE"}.get(sev, sev) if sev in
+                     ("CRITICAL", "HIGH", "MEDIUM", "MODERATE", "LOW") else "UNRATED",
+                     "score": score, "kev": bool(f["kev"]), "eco": eco.lower(), "pkg": pkg,
+                     "kind": _kind(sources, eco.lower()),
+                     "repos": [{"name": r, **v} for r, v in sorted(repos.items())]})
+    return rows
 
 
 @app.get("/feeds", response_class=HTMLResponse)
 def feed_page(request: Request):
-    # which feed ids touch a tracked repo (via an issue's id or aliases)
-    touch = {}
-    for i in db.q(f"SELECT vuln_id, aliases, repo FROM issues WHERE {db.TRACKED}"):
-        for a in [i["vuln_id"], *db.jl(i["aliases"])]:
-            touch.setdefault(a, set()).add(i["repo"])
-    rows = []
-    for f in db.q("SELECT * FROM feed_items ORDER BY date DESC LIMIT 1000"):
-        title, sev, score = f["title"], (f["severity"] or "").split(" ")[0].upper(), None
-        m = SEV_IN_TITLE.search(title)
-        if m:
-            sev, score = m.group(1).upper(), m.group(2)
-            title = (title[:m.start()] + (":" if m.group(0).rstrip().endswith(":") else "") + title[m.end():]).strip()
-        title = re.sub(r"^\[KEV\]\s*", "", title)
-        if f["kev"]:
-            sev = "KEV"
-        ids = db.jl(f["ids"])
-        rows.append({"title": title, "link": f["link"], "date": f["date"], "summary": (f["summary"] or "")[:280], "ids": ids,
-                     "sources": db.jl(f["sources"]), "sev": {"MEDIUM": "MODERATE"}.get(sev, sev) or "",
-                     "score": score, "kev": bool(f["kev"]),
-                     "repos": sorted({r for i in ids for r in touch.get(i, ())})})
-    return page(request, "feeds.html", rows=rows)
+    last = db.one("SELECT finished FROM runs WHERE job IN ('feeds','pipeline') AND ok=1 ORDER BY id DESC LIMIT 1")
+    return page(request, "feeds.html", rows=feed_rows(), synced=last and last["finished"])
+
+
+@app.post("/api/feeds/check")
+def feed_check(key: str = Form(...)):
+    """Which tracked repos use this advisory's package, and is their locked version affected (asks OSV)?"""
+    row = next((r for r in feed_rows() if r["key"] == key), None)
+    if not row:
+        return JSONResponse({"error": "Advisory not found."}, 404)
+    if not row["pkg"]:
+        return {"repos": [], "note": "This item names no package, so only advisory-id matches from the last scan apply."}
+    eco, name = GH_ECO.get(row["eco"], row["eco"]), row["pkg"].split(" +")[0]
+    deps = db.q(f"SELECT DISTINCT repo, version FROM deps WHERE ecosystem=? AND lower(name)=lower(?) "
+                f"AND version IS NOT NULL AND {db.TRACKED}", eco, name)
+    if not deps:
+        return {"repos": [], "note": f"No tracked repo depends on {name}."}
+    ids = {i.upper() for i in row["ids"]}
+    hits = osv.query([(eco, name, d["version"]) for d in {d["version"]: d for d in deps}.values()])
+    bad = set()
+    for (_, _, ver), vids in hits.items():
+        for v in vids:
+            rec, _ = osv.vuln(v)
+            if ids & {x.upper() for x in [v, *rec.get("aliases", [])]}:
+                bad.add(ver)
+    out = [{"name": d["repo"], "version": d["version"], "vulnerable": d["version"] in bad} for d in deps]
+    return {"repos": sorted(out, key=lambda r: (not r["vulnerable"], r["name"])), "note": ""}
 
 
 # ---------- check any public repo ----------
@@ -450,13 +513,15 @@ def _age(ts):
 @app.get("/runs", response_class=HTMLResponse)
 def runs(request: Request):
     rows = db.q("SELECT * FROM runs ORDER BY id DESC LIMIT 100")
+    live_ids = {r["rid"] for r in jobs.running()}
     for r in rows:
         lines = (r["log"] or "").splitlines()
         r["summary"] = [m.group(0) for l in lines if (m := SUMMARY.match(l.strip()))]
         r["counts"] = {k: sum(f": {k}" in l or f"={k}" in l for l in lines)
                        for k in ("ready", "escalated", "ERROR")}
-        live = not r["finished"] and jobs.state["job"] == r["job"]
-        r["state"] = "ok" if r["ok"] else ("failed" if r["finished"] else ("running" if live or _age(r["started"]) < 1800
+        live = not r["finished"] and r["id"] in live_ids
+        stopped = (r["log"] or "").endswith(jobs.STOPPED_LINE)
+        r["state"] = "ok" if r["ok"] else ("stopped" if stopped else "failed" if r["finished"] else ("running" if live or _age(r["started"]) < 1800
                                                                            else "stale"))
         r["type"] = r["job"].split(" ")[0]
     return page(request, "runs.html", rows=rows)
@@ -471,10 +536,23 @@ def run_fail(rid: int):
 
 @app.post("/api/run/{job}")
 def run_job(job: str):
-    return {"started": job in jobs.JOBS and jobs.run(job)}
+    return {"started": job in jobs.JOBS and jobs.submit(job)}
+
+
+@app.post("/api/job/stop")
+def job_stop(rid: int | None = None):
+    """No rid: stop every running job and drop the queue."""
+    return {"stopping": jobs.stop(rid)}
 
 
 @app.get("/api/job")
 def job_status():
-    last = db.one("SELECT job, finished, ok FROM runs WHERE finished IS NOT NULL ORDER BY id DESC LIMIT 1")
-    return {"job": jobs.state["job"], "line": (jobs.state["lines"] or [""])[-1].strip(), "last": last}
+    last = db.one("SELECT job, finished, ok, log FROM runs WHERE finished IS NOT NULL ORDER BY id DESC LIMIT 1")
+    s = jobs.status()
+    stopped = last and (last["log"] or "").endswith(jobs.STOPPED_LINE)
+    if last:
+        del last["log"]
+    return {"job": s["label"], "running": s["running"], "queued": s["queued"],
+            "line": s["running"][0]["line"] if s["running"] else "",
+            "stopping": bool(s["running"]) and all(r["stopping"] for r in s["running"]),
+            "last": last, "stopped": last["job"] if stopped else None}

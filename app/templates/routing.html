@@ -86,7 +86,7 @@
           <option value="HIGH">High, critical or exploited</option><option value="CRITICAL">Only critical or exploited</option></select></div>
       <p x-show="error" class="text-red-700 dark:text-red-300" x-text="error"></p>
       <div class="flex justify-end gap-2"><button type="button" @click="modal = false" class="btn-ghost">Cancel</button>
-        <button class="btn-primary" :disabled="!form.pattern || !goodEmails.length || badEmails.length">Add rule</button></div>
+        <button class="btn-primary" :disabled="!form.pattern || !goodEmails.length || badEmails.length > 0">Add rule</button></div>
     </form>
   </div>
 </div>

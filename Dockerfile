@@ -38,7 +38,7 @@ COPY vulnwatch/requirements.txt vulnwatch/requirements.txt
 RUN pip install -r vulnwatch/requirements.txt
 COPY vulnfeed/vulnfeed.py vulnfeed/feeds.json vulnfeed/
 COPY vulnwatch/ vulnwatch/
-RUN mkdir -p vulnwatch/data vulnwatch/secrets && chown -R vulnwatch:vulnwatch /app/vulnwatch/data
+RUN mkdir -p vulnwatch/data vulnwatch/db vulnwatch/secrets && chown -R vulnwatch:vulnwatch /app/vulnwatch/data /app/vulnwatch/db
 
 USER vulnwatch
 ENV HOME=/home/vulnwatch GOPATH=/home/vulnwatch/go npm_config_cache=/home/vulnwatch/.npm

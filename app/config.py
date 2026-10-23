@@ -20,7 +20,11 @@ ORG = env("GITHUB_ORG", "guvi-geek")   # org or personal account to watch
 
 # Each account gets its own database and clones, so switching GITHUB_ORG never mixes data.
 # guvi-geek keeps the original file names it was created with.
-DB_PATH = DATA / ("vulnwatch.db" if ORG == "guvi-geek" else f"vulnwatch-{ORG}.db")
+# DB_DIR: Docker keeps the database on a Docker volume, because SQLite locking isn't reliable on a Mac bind mount
+# shared by two containers (web + worker). Clones stay in data/.
+DB_DIR = Path(env("DB_DIR", str(DATA)))
+DB_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = DB_DIR / ("vulnwatch.db" if ORG == "guvi-geek" else f"vulnwatch-{ORG}.db")
 CLONES = DATA / ("clones" if ORG == "guvi-geek" else f"clones-{ORG}")
 FIXES_ROOT = DATA / ("fixes" if ORG == "guvi-geek" else f"fixes-{ORG}")
 DASHBOARD_URL = env("DASHBOARD_URL", "http://127.0.0.1:8000").rstrip("/")
@@ -36,6 +40,8 @@ RECENT_DAYS = int(env("RECENT_DAYS", "30"))       # older OSV hits are "backlog"
 MIN_SEVERITY = env("MIN_SEVERITY", "HIGH")        # HIGH or CRITICAL; KEV always passes
 INTERVAL_MIN = int(env("INTERVAL_MIN", "30"))
 SCHEDULER = env("SCHEDULER", "on") == "on"
+REDIS_URL = env("REDIS_URL", "")        # set (Docker): jobs go on a Redis queue for the worker; empty: threads in the web process
+WORKERS = int(env("WORKERS", "2"))      # jobs that may run at the same time
 AI_MAX_PER_RUN = int(env("AI_MAX_PER_RUN", "10"))
 AI_DAILY_TOKEN_BUDGET = int(env("AI_DAILY_TOKEN_BUDGET", "0"))   # 0 = no limit
 AI_PRICES = __import__("json").loads(env("AI_PRICES", "{}"))      # {"flash": {"in": .., "out": ..}, "pro": {...}} USD per 1M  # cap Gemini work per run

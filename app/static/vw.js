@@ -62,22 +62,29 @@ document.addEventListener("alpine:init", () => {
 
   // ---------- job status: one shared poller (header + mobile menu read it); announces finish ----------
   Alpine.store("job", {
-    job: null, line: "", wasRunning: false,
+    job: null, line: "", stopping: false, queued: [], wasRunning: false,
     async poll() {
       try {
         const s = await (await fetch("/api/job")).json();
         if (this.wasRunning && !s.job) {
           const ok = s.last && s.last.ok;
-          vw.toast(ok ? `Finished: ${s.last.job}` : `Run ended with errors: ${s.last ? s.last.job : ""}`, { kind: ok ? "ok" : "error" });
+          if (s.stopped) vw.toast(`Stopped: ${s.stopped}. Run it again to continue.`, { kind: "info" });
+          else vw.toast(ok ? `Finished: ${s.last.job}` : `Run ended with errors: ${s.last ? s.last.job : ""}`, { kind: ok ? "ok" : "error" });
           window.dispatchEvent(new Event("vw-refresh"));
         }
-        this.wasRunning = !!s.job; this.job = s.job; this.line = s.line;
+        this.wasRunning = !!s.job; this.job = s.job; this.line = s.line; this.stopping = s.stopping; this.queued = s.queued || [];
       } catch (e) {}
     },
     init() { this.poll(); setInterval(() => this.poll(), 3000); },
     async run() {
       const r = await vw.post("/api/run/pipeline");
-      vw.toast(r.started ? "Full check started. You can keep working." : "A job is already running.", { kind: r.started ? "ok" : "info" });
+      vw.toast(r.started ? "Full check queued. You can keep working." : "A full check is already running or queued.", { kind: r.started ? "ok" : "info" });
+      this.poll();
+    },
+    async stop() {
+      if (!confirm(`Stop ${this.job}${this.queued.length ? " and drop " + this.queued.length + " queued job(s)" : ""}? Running jobs stop after their current item; finished work is kept.`)) return;
+      const r = await vw.post("/api/job/stop");
+      vw.toast(r.stopping ? "Stopping after the current item…" : "Nothing is running.", { kind: "info" });
       this.poll();
     },
   });
@@ -116,7 +123,7 @@ document.addEventListener("alpine:init", () => {
     },
     async reResearch(f) {
       const r = await vw.post(`/api/findings/${f.id}/research`);
-      vw.toast(r.started ? `Researching ${f.package} on the web (about a minute)…` : "Another job is running; try again in a moment.", { kind: r.started ? "ok" : "info" });
+      vw.toast(r.started ? `Researching ${f.package} on the web (about a minute)…` : "Already queued or running for this finding.", { kind: r.started ? "ok" : "info" });
       if (r.started) delete this.researchNotes[f.id];
     },
     sevClass(s) { return "sev-" + (s || "UNKNOWN"); },
@@ -135,7 +142,7 @@ document.addEventListener("alpine:init", () => {
     async fixNow(f) {
       this.busy[f.id] = true;
       const r = await vw.post(`/api/findings/${f.id}/fix`);
-      vw.toast(r.started ? `Preparing a fix for ${f.package}…` : "Another job is running; try again in a moment.", { kind: r.started ? "ok" : "info" });
+      vw.toast(r.started ? `Preparing a fix for ${f.package}…` : "Already queued or running for this finding.", { kind: r.started ? "ok" : "info" });
       setTimeout(() => { this.busy[f.id] = false; }, 4000);
     },
     async openPr(f) {
@@ -143,12 +150,12 @@ document.addEventListener("alpine:init", () => {
       this.busy[f.id] = true;
       const r = await fetch(`/api/findings/${f.id}/pr`, { method: "POST" });
       const d = await r.json();
-      vw.toast(r.ok ? (d.started ? `Opening a PR for ${f.package}…` : "Another job is running; try again in a moment.") : d.error, { kind: r.ok && d.started ? "ok" : "error" });
+      vw.toast(r.ok ? (d.started ? `Opening a PR for ${f.package}…` : "Already queued or running for this finding.") : d.error, { kind: r.ok && d.started ? "ok" : "error" });
       setTimeout(() => { this.busy[f.id] = false; }, 4000);
     },
     async analyze(f) {
       const r = await vw.post(`/api/findings/${f.id}/analyze`);
-      vw.toast(r.started ? `AI review started for ${f.package}` : "Another job is running; try again in a moment.", { kind: r.started ? "ok" : "info" });
+      vw.toast(r.started ? `AI review started for ${f.package}` : "Already queued or running for this finding.", { kind: r.started ? "ok" : "info" });
     },
   });
 });

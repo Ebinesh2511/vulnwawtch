@@ -27,24 +27,50 @@ cd vulnwatch
 
 ## Docker
 
-One image holds the app and every tool it calls: Python, `gh`, `git`, `ripgrep`, Node/npm, Go and `govulncheck`. It runs as a non-root user.
+Three containers (`docker-compose.yml`):
+
+| Service | Image | Job |
+|---|---|---|
+| `web` | `vulnwatch:local` | Dashboard on http://127.0.0.1:8080. Only **queues** jobs. |
+| `worker` | `vulnwatch:local` (`python worker.py`) | Takes jobs off the queue and runs **2 at once** (`WORKERS`). |
+| `redis` | `redis:7-alpine` | The job queue (RQ). Append-only file, so queued jobs survive a restart. |
+
+`vulnwatch:local` holds the app and every tool it calls: Python, `gh`, `git`, `ripgrep`, Node/npm, Go and `govulncheck`. It runs as a non-root user.
 
 ```bash
 cd vulnwatch
 GEMINI_API_KEY=... docker compose up -d --build     # http://127.0.0.1:8080
-docker compose logs -f                              # follow the app log
-docker compose down                                 # stop
+docker compose logs -f worker                       # follow the jobs
+docker compose down                                 # stop (data and queue are kept)
 ```
 
-- **GitHub:** uses the GitHub App (`GITHUB_APP_ID` + key), so no `gh auth login` is needed and your Mac keychain isn't involved. Without an App, pass `GH_TOKEN` instead.
+**Jobs and the queue**
+- Run check, Re-research, Fix now, etc. put a job on the queue; the header shows what is running and how many are queued.
+- The same job is never queued twice: a second Run check while one is waiting or running is refused.
+- Jobs that write git clones or fix worktrees take a shared lock and run one after another:
+  - full check, repo sync/rescan, reachability, auto-fix, fix/PR.
+- The second slot is for the rest: research, AI review, feeds, matching, mail.
+- **Stop:**
+  - the square button in the header stops every running job and drops the queue;
+  - Runs → open a running run → "Stop this run" stops just that one;
+  - a job stops at its next log line (the current repo or AI call finishes first) and is recorded as Stopped;
+  - run it again to continue: finished work (AI verdicts, research) is kept and skipped.
+- Without `REDIS_URL` (plain `python run.py`) jobs run as threads in the web process, with the same rules.
+
+**Storage**
+- **Database:** SQLite on the `db` Docker volume (`DB_DIR`), shared by `web` and `worker`. SQLite locking isn't reliable on a Mac folder mounted into two containers, so it isn't kept in `data/`.
+  - Back it up: `docker compose cp web:/app/vulnwatch/db ./db-backup`
+  - The `data/*.db` files on your Mac are the old copies used by `python run.py`. They aren't updated by Docker.
+- **`data/`** (mounted): clones, fix worktrees, logs.
 - **Secrets never go into the image** (`Dockerfile.dockerignore` is an allow-list):
-  - `.env` is read at runtime (`env_file`);
+  - `.env` is read at runtime;
   - `secrets/` (the App key) is mounted read-only;
   - `GEMINI_API_KEY` comes from your shell.
-- **Data:** `data/` is mounted, so the database, clones and fix worktrees survive restarts and rebuilds.
-- **One writer per database:** don't run the host app (`python run.py`) and the container on the same `GITHUB_ORG` at the same time. SQLite locks aren't reliable across the Docker VM boundary.
+
+**Other notes**
+- **GitHub:** uses the GitHub App (`GITHUB_APP_ID` + key), so no `gh auth login` is needed. Without an App, pass `GH_TOKEN` instead.
 - **Port:** published on `127.0.0.1` only, because the dashboard has no login. To serve others, put it behind an authenticating proxy first, then change the port mapping and `DASHBOARD_URL`.
-- **GitHub App URLs:** the install-flow Setup URL in the App settings must match where the dashboard is reached, e.g. `http://127.0.0.1:8080/github/setup` for this compose file.
+- **GitHub App URLs:** the install-flow Setup URL in the App settings must match where the dashboard is reached, e.g. `http://127.0.0.1:8080/github/setup`.
 
 ## Styles
 

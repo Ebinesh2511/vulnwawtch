@@ -6,3 +6,5 @@ google-genai
 python-dotenv
 markdown-it-py
 pyjwt[crypto]
+redis>=5
+rq>=2

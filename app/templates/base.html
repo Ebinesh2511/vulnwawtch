@@ -47,8 +47,13 @@
           <template x-if="$store.job.job">
             <span class="inline-flex min-h-[40px] max-w-[16rem] items-center gap-2 truncate rounded-lg bg-blue-600 px-3 text-sm" :title="$store.job.line">
               <svg class="h-4 w-4 shrink-0 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
-              <span class="truncate" x-text="$store.job.job"></span>
+              <span class="truncate" x-text="($store.job.stopping ? 'Stopping… ' : '') + $store.job.job + ($store.job.queued.length ? ' · ' + $store.job.queued.length + ' queued' : '')"></span>
             </span>
+          </template>
+          <template x-if="$store.job.job && !$store.job.stopping">
+            <button @click="$store.job.stop()" class="btn-icon ml-1 text-slate-300 hover:bg-white/10 hover:text-white" aria-label="Stop the running job" title="Stop">
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            </button>
           </template>
           <template x-if="!$store.job.job">
             <button @click="$store.job.run()" class="btn-primary hidden sm:inline-flex">{{ icon("play", "w-4 h-4") }} Run check</button>
@@ -82,7 +87,8 @@
       {% endfor %}
       <div class="mt-2 sm:hidden">
         <button x-show="!$store.job.job" @click="$store.job.run(); menu = false" class="btn-primary w-full min-h-[48px]">{{ icon("play") }} Run full check</button>
-        <p x-show="$store.job.job" class="pill-blue min-h-[40px] w-full justify-center" x-text="'Running: ' + $store.job.job"></p>
+        <p x-show="$store.job.job" class="pill-blue min-h-[40px] w-full justify-center" x-text="($store.job.stopping ? 'Stopping: ' : 'Running: ') + $store.job.job"></p>
+        <button x-show="$store.job.job && !$store.job.stopping" @click="$store.job.stop(); menu = false" class="btn-ghost w-full min-h-[48px]">Stop</button>
       </div>
     </nav>
   </header>
