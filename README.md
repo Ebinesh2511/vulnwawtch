@@ -25,6 +25,27 @@ cd vulnwatch
 
 **Read-only:** GitHub access status, and whether each secret is set. Secrets are never shown or editable in the browser.
 
+## Docker
+
+One image holds the app and every tool it calls: Python, `gh`, `git`, `ripgrep`, Node/npm, Go and `govulncheck`. It runs as a non-root user.
+
+```bash
+cd vulnwatch
+GEMINI_API_KEY=... docker compose up -d --build     # http://127.0.0.1:8080
+docker compose logs -f                              # follow the app log
+docker compose down                                 # stop
+```
+
+- **GitHub:** uses the GitHub App (`GITHUB_APP_ID` + key), so no `gh auth login` is needed and your Mac keychain isn't involved. Without an App, pass `GH_TOKEN` instead.
+- **Secrets never go into the image** (`Dockerfile.dockerignore` is an allow-list):
+  - `.env` is read at runtime (`env_file`);
+  - `secrets/` (the App key) is mounted read-only;
+  - `GEMINI_API_KEY` comes from your shell.
+- **Data:** `data/` is mounted, so the database, clones and fix worktrees survive restarts and rebuilds.
+- **One writer per database:** don't run the host app (`python run.py`) and the container on the same `GITHUB_ORG` at the same time. SQLite locks aren't reliable across the Docker VM boundary.
+- **Port:** published on `127.0.0.1` only, because the dashboard has no login. To serve others, put it behind an authenticating proxy first, then change the port mapping and `DASHBOARD_URL`.
+- **GitHub App URLs:** the install-flow Setup URL in the App settings must match where the dashboard is reached, e.g. `http://127.0.0.1:8080/github/setup` for this compose file.
+
 ## Styles
 
 CSS is a static Tailwind build (no runtime CDN). After changing classes in `app/templates/` or `app/static/vw.js`:

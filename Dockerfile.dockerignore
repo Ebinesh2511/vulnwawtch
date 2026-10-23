@@ -1,0 +1,13 @@
+# Allow-list: the build context is the parent folder, so send only what the image needs.
+# Secrets (.env, secrets/, *.pem) and local data never enter the image.
+**
+!vulnfeed/vulnfeed.py
+!vulnfeed/feeds.json
+!vulnwatch/
+vulnwatch/.env
+vulnwatch/secrets
+vulnwatch/**/*.pem
+vulnwatch/data
+vulnwatch/tools/node_modules
+vulnwatch/**/__pycache__
+vulnwatch/.git
