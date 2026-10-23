@@ -22,8 +22,8 @@ import subprocess
 import tempfile
 from pathlib import Path, PurePosixPath
 
-from . import config, db, findings, gh, mailer, manifests, osv, research
-from .config import BOT_EMAIL, BOT_NAME, CLONES, DASHBOARD_URL, FIXES, ORG
+from . import config, db, findings, gh, github_auth, mailer, manifests, osv, research
+from .config import CLONES, FIXES, ORG
 
 
 class FixError(RuntimeError):
@@ -245,8 +245,8 @@ def _pr_body(f, target, new_versions, files):
         lines += ["", f"_If this cannot be merged soon:_ {d['mitigation_now']}"]
     if r.get("sources"):
         lines += ["", "### Sources"] + [f"- [{s['title'] or s['url']}]({s['url']})" for s in r["sources"][:6]]
-    if not re.search(r"//(127\.0\.0\.1|localhost)", DASHBOARD_URL):   # a local dashboard link is useless to reviewers
-        lines += ["", f"Full details: {DASHBOARD_URL}/issues/{f['id']}"]
+    if not re.search(r"//(127\.0\.0\.1|localhost)", config.DASHBOARD_URL):   # a local dashboard link is useless to reviewers
+        lines += ["", f"Full details: {config.DASHBOARD_URL}/issues/{f['id']}"]
     lines += ["", "_Opened automatically by VulnWatch._"]
     return "\n".join(lines)
 
@@ -288,7 +288,8 @@ def apply(f, kind, log, open_pr=False):
 
         title = f"fix(security): bump {f['package']} to {target}"
         body = _pr_body(f, target, new_versions, files)
-        git = ["git", "-c", f"user.name={BOT_NAME}", "-c", f"user.email={BOT_EMAIL}"]
+        bot_name, bot_email = github_auth.bot_identity()
+        git = ["git", "-c", f"user.name={bot_name}", "-c", f"user.email={bot_email}"]
         _sh(["git", "add", "-A"], wt, log)
         _sh(git + ["commit", "-q", "-m", title, "-m", body], wt, log)
         stat = _sh(["git", "diff", "--stat", "HEAD~1", "HEAD"], wt, log)

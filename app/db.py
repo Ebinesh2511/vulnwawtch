@@ -97,6 +97,21 @@ CREATE TABLE IF NOT EXISTS reachability (
   PRIMARY KEY (repo, ecosystem, package)
 );
 
+CREATE TABLE IF NOT EXISTS installations (
+  id TEXT PRIMARY KEY,   -- GitHub App installation id
+  account TEXT, account_type TEXT, repo_selection TEXT,   -- all | selected
+  suspended INTEGER DEFAULT 0, html_url TEXT, created_at TEXT, updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ai_usage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, step TEXT, model TEXT,
+  input_tokens INTEGER, output_tokens INTEGER, thinking_tokens INTEGER, total_tokens INTEGER,
+  web_search INTEGER, repo TEXT, package TEXT
+);
+CREATE INDEX IF NOT EXISTS ai_usage_at ON ai_usage(at);
+
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);
+
 CREATE TABLE IF NOT EXISTS checks (
   id TEXT PRIMARY KEY, url TEXT, repo TEXT,
   status TEXT,           -- queued | running | done | error

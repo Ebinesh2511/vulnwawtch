@@ -8,6 +8,29 @@
     <button @click="job('rescan', 'Rescanning every tracked repo…')" class="btn-ghost">Force rescan</button>
   {% endcall %}
 
+  {% set ours = installs|selectattr("account", "equalto", cfg.ORG)|list %}
+  <section class="card mb-4 p-4">
+    <div class="flex flex-wrap items-center gap-3">
+      {{ icon("github", "w-5 h-5") }}
+      <div class="min-w-[14rem] flex-1">
+        <p class="font-semibold">GitHub access
+          <span class="ml-1 {{ 'pill-green' if access.ok and access.mode == 'app' else ('pill-red' if not access.ok else 'pill-amber') }}">{{ {'app': 'GitHub App', 'token': 'Token', 'gh-login': 'Personal gh login'}[access.mode] }}{{ '' if access.ok else ': not working' }}</span></p>
+        <p class="muted">{{ access.detail }}</p>
+        {% for i in ours %}
+        <p class="muted">Installed on <b class="text-slate-900 dark:text-white">{{ i.account }}</b> ·
+          {{ 'all repositories' if i.repo_selection == 'all' else 'selected repositories' }}{% if i.suspended %} · <span class="text-red-700 dark:text-red-300">suspended</span>{% endif %}</p>
+        {% endfor %}
+      </div>
+      {% if access.mode == 'app' %}
+        <a href="/github/install" class="btn-primary">{{ icon("plus") }} {{ 'Choose repositories' if ours else 'Install on GitHub' }}</a>
+        {% for i in ours if i.html_url %}<a href="{{ i.html_url }}" target="_blank" rel="noopener" class="btn-secondary">Manage on GitHub {{ icon("external", "w-3.5 h-3.5") }}</a>{% endfor %}
+      {% endif %}
+    </div>
+    {% if access.mode != 'app' %}
+    <p class="mt-2 text-[13px] muted">Set <code class="font-mono">GITHUB_APP_ID</code> and the private key in <code class="font-mono">.env</code> to switch to a GitHub App; an “Install on GitHub” button then appears here.</p>
+    {% endif %}
+  </section>
+
   <div class="mb-4 grid grid-cols-3 gap-3 sm:max-w-xl">
     <button @click="show = 'tracked'" class="card p-3 text-left transition duration-[120ms] hover:-translate-y-0.5"><div class="muted">Tracked</div><div class="text-2xl font-bold text-emerald-700 dark:text-emerald-300 tabular-nums" x-text="rows.filter(r => r.tracked).length"></div></button>
     <button @click="show = 'untracked'" class="card p-3 text-left"><div class="muted">Not tracked</div><div class="text-2xl font-bold tabular-nums" x-text="rows.filter(r => !r.tracked).length"></div></button>
@@ -95,6 +118,18 @@
 
 <script>
 function repos() {
+  const gh = new URLSearchParams(location.search).get("gh");
+  if (gh) {
+    const acc = new URLSearchParams(location.search).get("account") || "";
+    const msg = { installed: [`GitHub App connected to ${acc}. Syncing its repositories…`, "ok"],
+                  other: [`Installed on ${acc}, but VulnWatch watches {{ cfg.ORG }}. Set GITHUB_ORG to switch.`, "info"],
+                  requested: ["Install requested. An owner of the account has to approve it on GitHub.", "info"],
+                  bad_state: ["That install link was not started from this dashboard, so it was ignored.", "error"],
+                  unknown: ["GitHub did not recognise that installation for this App.", "error"],
+                  not_configured: ["The GitHub App is not configured in .env yet.", "error"] }[gh];
+    if (msg) document.addEventListener("alpine:initialized", () => vw.toast(msg[0], { kind: msg[1], timeout: 7000 }));
+    history.replaceState({}, "", "/repos");
+  }
   return {
     rows: {{ rows|tojson }}, q: "", show: "all", sort: "risk", branches: {},
     stale(r) { return r.pushed_at && (Date.now() - Date.parse(r.pushed_at)) > 182 * 864e5; },

@@ -5,7 +5,7 @@ import traceback
 
 from . import ai, autofix, classify, db, evidence, feeds, inventory, mailer, matcher, reachability, research
 from . import config
-from .config import INTERVAL_MIN, SCHEDULER
+
 
 _lock = threading.Lock()
 state = {"job": None, "lines": []}
@@ -76,13 +76,12 @@ def run(job, fn=None):
 
 
 def start_scheduler():
-    if not SCHEDULER:
-        return
-
+    """Always running; each cycle reads SCHEDULER and INTERVAL_MIN, so the Settings page can switch it live."""
     def loop():
         time.sleep(20)
         while True:
-            run("pipeline")
-            time.sleep(INTERVAL_MIN * 60)
+            if config.SCHEDULER:
+                run("pipeline")
+            time.sleep(max(1, config.INTERVAL_MIN) * 60)
 
     threading.Thread(target=loop, daemon=True).start()

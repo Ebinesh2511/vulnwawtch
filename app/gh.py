@@ -1,8 +1,10 @@
-"""All GitHub access goes through here (gh CLI today; swap for a GitHub App token later)."""
+"""All GitHub access goes through here: the gh CLI, with the token from github_auth (GitHub App,
+GH_TOKEN, or the local gh login). Commands run directly, never through a shell."""
 import json
-import os
 import shutil
 import subprocess
+
+from . import github_auth
 
 
 class GhError(RuntimeError):
@@ -10,7 +12,7 @@ class GhError(RuntimeError):
 
 
 def _run(args, timeout=60):
-    p = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=timeout)
+    p = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=timeout, env=github_auth.env())
     if p.returncode != 0:
         raise GhError((p.stderr or p.stdout).strip()[:300])
     return p.stdout
@@ -25,6 +27,13 @@ def api(path, raw=False):
 
 
 def list_repos(org):
+    if github_auth.mode() == "app":
+        # an App sees exactly the repos it is installed on
+        pages = json.loads(_run(["api", "--paginate", "--slurp", "installation/repositories?per_page=100"]))
+        return [{"name": r["name"], "defaultBranchRef": {"name": r.get("default_branch")}, "isArchived": r["archived"],
+                 "isEmpty": not r.get("size"), "primaryLanguage": {"name": r.get("language")}, "pushedAt": r.get("pushed_at"),
+                 "visibility": "PRIVATE" if r["private"] else "PUBLIC"}
+                for p in pages for r in p.get("repositories", []) if r["owner"]["login"].lower() == org.lower()]
     out = _run(["repo", "list", org, "--limit", "1000", "--json",
                 "name,defaultBranchRef,isArchived,isEmpty,primaryLanguage,pushedAt,visibility"])
     return json.loads(out)
@@ -54,7 +63,7 @@ def languages(org, repo):
 def git_env():
     """Use gh as the only git credential helper: other helpers (e.g. osxkeychain) can block forever
     waiting for a dialog when this runs in the background. Nothing secret goes on the command line."""
-    return {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_COUNT": "2",
+    return {**github_auth.env(), "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_COUNT": "2",
             "GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "",
             "GIT_CONFIG_KEY_1": "credential.helper", "GIT_CONFIG_VALUE_1": "!gh auth git-credential"}
 

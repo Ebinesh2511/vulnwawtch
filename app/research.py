@@ -15,9 +15,9 @@ from typing import Literal
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from . import db, findings
+from . import config, db, findings
 from .ai import SYSTEM, client
-from .config import GUIDE_MODELS, TRIAGE_MODELS
+
 
 
 class Decision(BaseModel):
@@ -83,14 +83,15 @@ def _real_url(u):
     return u
 
 
-def _search(prompt):
+def _search(prompt, repo=None, package=None):
+    from . import ai_usage
     errors = []
-    for model in GUIDE_MODELS:
+    for model in config.GUIDE_MODELS:
         for attempt in range(2):
             try:
-                r = client().models.generate_content(
-                    model=model, contents=prompt,
-                    config=types.GenerateContentConfig(system_instruction=SYSTEM, tools=[types.Tool(google_search=types.GoogleSearch())]))
+                r = ai_usage.generate("research", model, prompt,
+                                      types.GenerateContentConfig(system_instruction=SYSTEM, tools=[types.Tool(google_search=types.GoogleSearch())]),
+                                      repo, package)
                 if not r.text:
                     raise RuntimeError("empty response")
                 gm = r.candidates[0].grounding_metadata
@@ -101,21 +102,24 @@ def _search(prompt):
                         seen.add(ch.web.uri)
                         sources.append({"title": ch.web.title, "url": ch.web.uri})
                 return r.text, sources[:10], (gm.web_search_queries or []) if gm else [], model
+            except ai_usage.BudgetExceeded:
+                raise
             except Exception as e:
                 errors.append(f"{model}: {str(e)[:120]}")
                 time.sleep(3 * (attempt + 1))
     raise RuntimeError("Research failed: " + " | ".join(errors[-2:]))
 
 
-def _decide(facts, notes):
+def _decide(facts, notes, repo=None, package=None):
+    from . import ai_usage
     errors = []
-    for model in TRIAGE_MODELS:
+    for model in config.TRIAGE_MODELS:
         try:
-            r = client().models.generate_content(
-                model=model, contents=facts + "\n<research>\n" + notes[:12000] + "\n</research>\n\nTurn this into the fix decision. "
-                         "Every automated fix is opened as a pull request that people review and test, so do not ask "
-                         "for a human just to verify or test a plain version bump.",
-                config=types.GenerateContentConfig(system_instruction=SYSTEM, response_mime_type="application/json", response_schema=Decision))
+            r = ai_usage.generate("decision", model, facts + "\n<research>\n" + notes[:12000] + "\n</research>\n\nTurn this into the fix decision. "
+                                 "Every automated fix is opened as a pull request that people review and test, so do not ask "
+                                 "for a human just to verify or test a plain version bump.",
+                                 types.GenerateContentConfig(system_instruction=SYSTEM, response_mime_type="application/json", response_schema=Decision),
+                                 repo, package)
             if r.parsed:
                 return r.parsed
             raise RuntimeError("empty decision")
@@ -162,7 +166,7 @@ def instructions(f, log=print):
     prompt = (_facts(f) + "\n<research>\n" + r["notes"][:12000] + "\n</research>\n<decision>\n" + json.dumps(r["decision"])
               + "\n</decision>\n<sources>\n" + "\n".join(s["url"] for s in r["sources"]) + "\n</sources>\n"
               + f"Why a human: {(fx or {}).get('reason') or r['decision'].get('human_reason')}\n\n" + INSTRUCTIONS_PROMPT)
-    text = _gen(GUIDE_MODELS, prompt)
+    text = _gen(config.GUIDE_MODELS, prompt, step="instructions", repo=f["repo"], package=f["package"])
     db.x("UPDATE research SET instructions=? WHERE repo=? AND ecosystem=? AND package=?", text, f["repo"], f["ecosystem"], f["package"])
     log(f"  instructions {f['repo']}/{f['package']}: {len(text)} chars")
     return text
@@ -184,8 +188,8 @@ def research(f, log=print, force=False):
     if cur and cur["vuln_key"] == _key(f) and not force:
         return cur
     facts = _facts(f)
-    notes, sources, queries, model = _search(facts + "\n" + RESEARCH_PROMPT)
-    decision = _decide(facts, notes)
+    notes, sources, queries, model = _search(facts + "\n" + RESEARCH_PROMPT, f["repo"], f["package"])
+    decision = _decide(facts, notes, f["repo"], f["package"])
     for s in sources:
         s["url"] = _real_url(s["url"])
     db.x("""INSERT INTO research(repo, ecosystem, package, vuln_key, notes, decision, sources, queries, model, created_at)
@@ -205,7 +209,13 @@ def run(log=print, limit=None, force=False):
     todo = [f for f in findings.build() if f["confirmed"] and f["status"] in ("open", "in_progress")]
     todo.sort(key=lambda f: (f["priority"], -f["kev"]))
     done = 0
+    from . import ai_usage
     for f in todo[:limit or len(todo)]:
+        try:
+            ai_usage.check_budget()
+        except ai_usage.BudgetExceeded as e:
+            log(f"research: stopped: {e}")
+            break
         try:
             cur = get(f)
             if cur and cur["vuln_key"] == _key(f) and not force:

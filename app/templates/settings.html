@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, page_header %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<div x-data="settingsPage()" x-init="load()">
+  {% call page_header("Settings", "For developers: AI usage and how VulnWatch runs. Changes apply at once and are saved; .env stays the default.") %}
+    <span class="pill-slate">{{ cfg.ORG }} · {{ db_file }}</span>
+  {% endcall %}
+
+  <!-- AI usage -->
+  <section class="mb-8">
+    <div class="mb-3 flex flex-wrap items-center gap-2">
+      <h2 class="section-title mr-auto">AI usage</h2>
+      <div class="tabs" role="tablist" aria-label="Period">
+        <template x-for="d in [7, 30, 90]" :key="d">
+          <button role="tab" :aria-selected="days === d" @click="days = d; load()" class="tab" x-text="d + ' days'"></button>
+        </template>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div class="card p-4">
+        <div class="muted">Today</div>
+        <div class="mt-1 text-2xl font-bold tabular-nums" x-text="fmt(u.today?.tokens)"></div>
+        <div class="text-[13px] muted" x-text="vw.plural(u.today?.calls || 0, 'call') + (u.budget ? ' · budget ' + fmt(u.budget) : ' · no budget')"></div>
+        <div x-show="u.budget" class="mt-2 h-2 rounded-full bg-slate-100 dark:bg-slate-800" role="meter" :aria-valuenow="u.today?.tokens" :aria-valuemax="u.budget" aria-label="Daily budget used">
+          <div class="h-2 rounded-full transition-all duration-[240ms]" :class="pct >= 90 ? 'bg-red-600' : (pct >= 70 ? 'bg-amber-500' : 'bg-emerald-600')" :style="`width:${Math.min(100, pct)}%`"></div>
+        </div>
+      </div>
+      <div class="card p-4"><div class="muted">Last 7 days</div><div class="mt-1 text-2xl font-bold tabular-nums" x-text="fmt(u.week?.tokens)"></div><div class="text-[13px] muted" x-text="vw.plural(u.week?.calls || 0, 'call')"></div></div>
+      <div class="card p-4"><div class="muted" x-text="'Last ' + days + ' days'"></div><div class="mt-1 text-2xl font-bold tabular-nums" x-text="fmt(u.month?.tokens)"></div><div class="text-[13px] muted" x-text="vw.plural(u.month?.calls || 0, 'call')"></div></div>
+      <div class="card p-4"><div class="muted">Estimated cost</div>
+        <div class="mt-1 text-2xl font-bold tabular-nums" x-text="u.cost == null ? '—' : '$' + u.cost.toFixed(2)"></div>
+        <div class="text-[13px] muted" x-text="u.cost == null ? 'Set prices below to estimate' : 'from your prices, ' + days + ' days'"></div></div>
+    </div>
+
+    <!-- tokens per day -->
+    <div class="card mt-3 p-4">
+      <div class="mb-2 flex items-baseline justify-between"><h3 class="font-semibold">Tokens per day</h3><span class="text-[13px] muted">hover a bar for details</span></div>
+      <div x-show="!(u.daily || []).length" class="py-6 text-center muted">No AI calls recorded yet. Usage is tracked from now on.</div>
+      <div x-show="(u.daily || []).length" class="flex h-40 items-end gap-1" role="img" :aria-label="'Tokens per day over the last ' + days + ' days'">
+        <template x-for="d in u.daily || []" :key="d.day">
+          <div class="group relative flex h-full flex-1 items-end">
+            <div class="w-full rounded-t-[4px] bg-blue-600 transition-opacity duration-[120ms] group-hover:opacity-80 dark:bg-blue-400" :style="`height:${Math.max(2, d.tokens / maxDay * 100)}%`"></div>
+            <div class="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-xs text-white group-hover:block"
+                 x-text="d.day + ': ' + fmt(d.tokens) + ' tokens, ' + d.calls + ' calls'"></div>
+          </div>
+        </template>
+      </div>
+      <div x-show="(u.daily || []).length" class="mt-1 flex justify-between text-xs muted"><span x-text="(u.daily || [])[0]?.day"></span><span x-text="(u.daily || []).at(-1)?.day"></span></div>
+    </div>
+
+    <div class="mt-3 grid gap-3 lg:grid-cols-2">
+      <div class="card overflow-x-auto p-4">
+        <h3 class="mb-2 font-semibold">By step</h3>
+        <table class="w-full min-w-[420px] text-sm">
+          <thead class="text-left text-[13px] muted"><tr><th class="py-1 font-medium">Step</th><th class="font-medium">Calls</th><th class="font-medium">Tokens</th><th class="w-1/3"></th></tr></thead>
+          <tbody>
+            <template x-for="s in u.by_step || []" :key="s.step">
+              <tr class="border-t border-slate-100 dark:border-slate-800"><td class="py-1.5" x-text="STEP[s.step] || s.step"></td><td class="tabular-nums" x-text="s.calls"></td>
+                <td class="tabular-nums" x-text="fmt(s.tokens)"></td>
+                <td><div class="h-2 rounded-full bg-slate-100 dark:bg-slate-800"><div class="h-2 rounded-full bg-blue-600 dark:bg-blue-400" :style="`width:${s.tokens / maxStep * 100}%`"></div></div></td></tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+      <div class="card overflow-x-auto p-4">
+        <h3 class="mb-2 font-semibold">By model</h3>
+        <table class="w-full min-w-[480px] text-sm">
+          <thead class="text-left text-[13px] muted"><tr><th class="py-1 font-medium">Model</th><th class="font-medium">Calls</th><th class="font-medium">In</th><th class="font-medium">Out</th><th class="font-medium">Thinking</th><th class="font-medium">Cost</th></tr></thead>
+          <tbody>
+            <template x-for="m in u.by_model || []" :key="m.model">
+              <tr class="border-t border-slate-100 dark:border-slate-800"><td class="py-1.5 font-mono text-[13px]" x-text="m.model"></td><td class="tabular-nums" x-text="m.calls"></td>
+                <td class="tabular-nums" x-text="fmt(m.input)"></td><td class="tabular-nums" x-text="fmt(m.output)"></td><td class="tabular-nums" x-text="fmt(m.thinking)"></td>
+                <td class="tabular-nums" x-text="m.cost == null ? '—' : '$' + m.cost.toFixed(2)"></td></tr>
+            </template>
+          </tbody>
+        </table>
+        <p class="mt-2 text-[13px] muted" x-show="(u.by_model || []).some(m => m.searches)" x-text="'Includes ' + (u.by_model || []).reduce((a, m) => a + m.searches, 0) + ' calls with Google Search grounding, which may be billed separately.'"></p>
+      </div>
+    </div>
+
+    <details class="card mt-3 p-4">
+      <summary class="flex min-h-[40px] cursor-pointer items-center font-semibold">Recent calls</summary>
+      <ul class="mt-2 divide-y divide-slate-100 dark:divide-slate-800">
+        <template x-for="c in u.recent || []" :key="c.id">
+          <li class="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-2 text-sm">
+            <span class="w-32 muted" :title="vw.local(c.at)" x-text="vw.ago(c.at)"></span>
+            <span class="pill-slate" x-text="STEP[c.step] || c.step"></span>
+            <span class="font-mono text-[13px]" x-text="c.model"></span>
+            <span class="muted" x-text="(c.repo || '') + (c.package ? ' / ' + c.package : '')"></span>
+            <span class="ml-auto tabular-nums" x-text="fmt(c.total_tokens) + ' tokens'"></span>
+          </li>
+        </template>
+      </ul>
+    </details>
+  </section>
+
+  <!-- settings -->
+  <section class="mb-8">
+    <h2 class="section-title mb-3">How VulnWatch runs</h2>
+    <div class="grid gap-4 xl:grid-cols-2">
+      <template x-for="g in groups" :key="g">
+        <div class="card divide-y divide-slate-100 dark:divide-slate-800">
+          <h3 class="px-4 py-3 font-semibold" x-text="g"></h3>
+          <template x-for="f in fields.filter(f => f.group === g)" :key="f.key">
+            <div class="flex flex-wrap items-start gap-x-4 gap-y-2 px-4 py-3">
+              <div class="min-w-[12rem] flex-1">
+                <label class="font-medium" :for="'s-' + f.key" x-text="f.label"></label>
+                <p class="text-[13px] muted" x-text="f.help"></p>
+                <p class="mt-1 text-xs muted">
+                  <span :class="f.source === 'dashboard' ? 'pill-blue' : 'pill-slate'" x-text="{ dashboard: 'set here', '.env': 'from .env', default: 'default' }[f.source]"></span>
+                  <button x-show="f.source === 'dashboard'" @click="reset(f)" class="link ml-1 min-h-[32px]">Reset to .env</button>
+                </p>
+              </div>
+              <div class="w-full sm:w-64">
+                <template x-if="f.kind === 'bool'">
+                  <button :id="'s-' + f.key" role="switch" :aria-checked="!!f.value" @click="save(f, !f.value)" class="grid h-11 w-14 place-items-center rounded-lg" :aria-label="f.label">
+                    <span class="relative h-7 w-12 rounded-full transition-colors duration-[150ms]" :class="f.value ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'">
+                      <span class="absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform duration-[150ms]" :class="f.value && 'translate-x-5'"></span></span>
+                  </button>
+                </template>
+                <template x-if="f.kind === 'int'">
+                  <input :id="'s-' + f.key" type="number" :min="f.options[0]" :max="f.options[1]" :value="f.value" @change="save(f, $event.target.value)" class="input tabular-nums">
+                </template>
+                <template x-if="f.kind === 'choice'">
+                  <select :id="'s-' + f.key" @change="save(f, $event.target.value)" class="select w-full">
+                    <template x-for="o in f.options" :key="o"><option :value="o" :selected="String(f.value) === o" x-text="o"></option></template>
+                  </select>
+                </template>
+                <template x-if="f.kind === 'text' || f.kind === 'models'">
+                  <input :id="'s-' + f.key" :value="f.value" @change="save(f, $event.target.value)" class="input" :class="f.kind === 'models' && 'font-mono'">
+                </template>
+                <template x-if="f.kind === 'prices'">
+                  <div class="space-y-2">
+                    <template x-for="fam in ['flash-lite', 'flash', 'pro']" :key="fam">
+                      <div class="grid grid-cols-[5rem_1fr_1fr] items-center gap-2 text-sm">
+                        <span class="font-mono" x-text="fam"></span>
+                        <label class="sr-only" :for="'p-' + fam + '-in'" x-text="fam + ' input price'"></label>
+                        <input :id="'p-' + fam + '-in'" type="number" step="0.01" min="0" placeholder="in $/1M" :value="(f.value[fam] || {}).in" @change="setPrice(f, fam, 'in', $event.target.value)" class="input">
+                        <label class="sr-only" :for="'p-' + fam + '-out'" x-text="fam + ' output price'"></label>
+                        <input :id="'p-' + fam + '-out'" type="number" step="0.01" min="0" placeholder="out $/1M" :value="(f.value[fam] || {}).out" @change="setPrice(f, fam, 'out', $event.target.value)" class="input">
+                      </div>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <!-- read-only -->
+  <section class="grid gap-4 lg:grid-cols-2">
+    <div class="card p-4">
+      <h2 class="section-title mb-2">GitHub access</h2>
+      <p><span class="{{ 'pill-green' if access.ok and access.mode == 'app' else ('pill-red' if not access.ok else 'pill-amber') }}">{{ {'app': 'GitHub App', 'token': 'Token', 'gh-login': 'Personal gh login'}[access.mode] }}</span></p>
+      <p class="mt-2 muted">{{ access.detail }}</p>
+      <a href="/repos" class="link mt-2 inline-flex min-h-[40px] items-center">Manage repositories and installation →</a>
+    </div>
+    <div class="card p-4">
+      <h2 class="section-title mb-2">Secrets</h2>
+      <p class="mb-2 muted">Kept in <code class="font-mono">.env</code> or the server's secret store, never shown or edited here.</p>
+      <ul class="space-y-1.5">
+        {% for s in secrets %}
+        <li class="flex items-center gap-2"><span class="{{ 'pill-green' if s.set else 'pill-slate' }}">{{ 'set' if s.set else 'not set' }}</span><span>{{ s.label }}</span><code class="ml-auto font-mono text-xs muted">{{ s.key }}</code></li>
+        {% endfor %}
+      </ul>
+    </div>
+  </section>
+  <p class="mt-4 text-[13px] muted">Anyone who can open this dashboard can change these settings. Put a login in front of it before sharing it beyond this machine.</p>
+</div>
+
+<script>
+function settingsPage() {
+  return {
+    u: {}, days: 30, fields: {{ fields|tojson }},
+    STEP: { triage: "AI triage", guide: "Fix guide", research: "Web research", decision: "Fix decision", symbols: "Symbol check", instructions: "Developer instructions", ai: "Other" },
+    get groups() { return [...new Set(this.fields.map(f => f.group))]; },
+    get pct() { return this.u.budget ? (this.u.today?.tokens || 0) / this.u.budget * 100 : 0; },
+    get maxDay() { return Math.max(1, ...(this.u.daily || []).map(d => d.tokens)); },
+    get maxStep() { return Math.max(1, ...(this.u.by_step || []).map(s => s.tokens)); },
+    fmt(n) { n = n || 0; return n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n); },
+    async load() { this.u = await (await fetch("/api/usage?days=" + this.days)).json(); },
+    replace(s) { const i = this.fields.findIndex(x => x.key === s.key); this.fields[i] = s; },
+    async save(f, value) {
+      const r = await fetch("/api/settings", { method: "POST", body: new URLSearchParams({ key: f.key, value: typeof value === "object" ? JSON.stringify(value) : String(value) }) });
+      const d = await r.json();
+      if (!r.ok) { vw.toast(d.error, { kind: "error" }); return; }
+      this.replace(d.setting);
+      vw.toast(`${f.label} saved`, { kind: "ok" });
+      if (f.key === "AI_DAILY_TOKEN_BUDGET") this.load();
+    },
+    setPrice(f, fam, which, v) {
+      const p = JSON.parse(JSON.stringify(f.value || {}));
+      p[fam] = { in: 0, out: 0, ...(p[fam] || {}), [which]: parseFloat(v) || 0 };
+      this.save(f, p).then(() => this.load());
+    },
+    async reset(f) {
+      const d = await (await fetch(`/api/settings/${f.key}/reset`, { method: "POST" })).json();
+      this.replace(d.setting);
+      vw.toast(`${f.label} back to the .env value`, { kind: "ok" });
+    },
+  };
+}
+</script>
+{% endblock %}

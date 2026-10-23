@@ -9,8 +9,8 @@ import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from . import db, feeds, osv
-from .config import MIN_SEVERITY, RECENT_DAYS, SEV_RANK
+from . import config, db, feeds, osv
+from .config import SEV_RANK
 
 # Server products we may run as Docker images. Matched only against image names, never language words
 # ("php", "python" appear in thousands of unrelated CVE titles). Packages are covered by OSV instead.
@@ -28,7 +28,7 @@ def _recent(published):
         d = datetime.fromisoformat(published.replace("Z", "+00:00"))
     except ValueError:
         return False
-    return d >= datetime.now(timezone.utc) - timedelta(days=RECENT_DAYS)
+    return d >= datetime.now(timezone.utc) - timedelta(days=config.RECENT_DAYS)
 
 
 def run(log=print):
@@ -40,7 +40,7 @@ def run(log=print):
 
     hits = osv.query(list(where))
     kev, in_feed = feeds.kev_set(), feeds.feed_ids()
-    min_rank = SEV_RANK.get(MIN_SEVERITY, 3)
+    min_rank = SEV_RANK.get(config.MIN_SEVERITY, 3)
     present, new, actionable = set(), 0, 0
 
     for pkg, vids in hits.items():

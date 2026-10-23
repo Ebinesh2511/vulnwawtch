@@ -12,6 +12,19 @@ cd vulnwatch
 ../.venv/bin/python run.py
 ```
 
+## Settings page (`/settings`, `app/settings.py`, `app/ai_usage.py`)
+
+**AI usage.** Every Gemini call goes through `ai_usage.generate()`, which records step, model, input/output/thinking tokens, repo and library in the `ai_usage` table. The page shows:
+- today, 7 and 30 days, tokens per day, by step, by model, recent calls;
+- an optional cost estimate from per-1M prices you enter;
+- a **daily token budget**: when reached, AI review, research and symbol checks pause until tomorrow.
+
+**Live settings.** Scheduler on/off and interval, feed window, recent-advisory window, minimum severity, AI models and per-run limits, budget, prices, auto-fix mode / per-run / PR drafts / escalation level, mail mode and dashboard URL.
+- Saved in the `settings` table and applied at once; `.env` stays the default.
+- Each setting shows whether it comes from the default, `.env`, or was set here, and has a "Reset to .env".
+
+**Read-only:** GitHub access status, and whether each secret is set. Secrets are never shown or editable in the browser.
+
 ## Styles
 
 CSS is a static Tailwind build (no runtime CDN). After changing classes in `app/templates/` or `app/static/vw.js`:
@@ -33,6 +46,51 @@ Open http://127.0.0.1:8000 and press **Run full check**.
 
 - Needs `gh` logged in with access to the org (`gh auth status`).
 - Settings live in `.env` (copied from `.env.example`). Auto-run is `SCHEDULER=off` while developing; set it to `on` to check every `INTERVAL_MIN` minutes.
+
+## GitHub access (`app/github_auth.py`)
+
+Every `gh` and `git` call gets a token from one place. First match wins:
+
+1. **GitHub App** (recommended, required on a server): `GITHUB_APP_ID` + the private key. The app signs a JWT, exchanges it for a 1-hour installation token, caches it and renews it automatically. Fix commits and PRs come from the App's bot (`<app>[bot]`), not a person. The repo list is the repos the App is installed on.
+2. **`GH_TOKEN`** in the environment, e.g. a fine-grained token.
+3. **Local `gh auth login`.** Development only: it acts as you.
+
+The Repos page shows which one is active and whether it works.
+
+### Install flow (like Vercel / Netlify)
+Whoever runs VulnWatch creates the App once and keeps its private key on the server. Everyone else only clicks:
+
+1. **Repos page → Install on GitHub** (or **Choose repositories** when already installed). This opens GitHub's install screen with a one-time `state` value.
+2. You pick **All** or **Only select** repositories on GitHub.
+3. GitHub sends the browser back to **`/github/setup`**. VulnWatch asks GitHub, signed with the App key, whether that installation really belongs to this App, stores it in the `installations` table and syncs the repos. No IDs to copy. A forged `state` or an unknown installation is rejected.
+4. **`/github/webhook`** keeps it in step afterwards:
+   - repos added on GitHub are tracked and scanned;
+   - repos removed are untracked (their data is kept);
+   - uninstall or suspend stops access.
+   Each call must be signed with `GITHUB_WEBHOOK_SECRET` (HMAC-SHA256). Unsigned calls are refused.
+5. **Safety net:** every repo sync also untracks repos no longer shared with the App, in case a webhook was missed.
+
+**App settings to match** (GitHub → Settings → Developer settings → GitHub Apps → your App):
+- **Setup URL:** `<DASHBOARD_URL>/github/setup`. Tick **Redirect on update** so repo changes also come back.
+- **Webhook URL:** `<DASHBOARD_URL>/github/webhook`, with **Secret** = `GITHUB_WEBHOOK_SECRET`, and **Active** ticked. GitHub must be able to reach this URL, so it only works once VulnWatch is hosted. To test locally, forward with `npx smee-client --url https://smee.io/<your-channel> --target http://127.0.0.1:8000/github/webhook`.
+
+### Create the GitHub App (org owner, ~5 minutes)
+1. Go to `https://github.com/organizations/guvi-geek/settings/apps/new`.
+   - Name: e.g. `VulnWatch guvi-geek`.
+   - Homepage: any URL.
+   - Webhook: **off**.
+2. Repository permissions:
+   - **Contents: Read** (Read & write only for `AUTOFIX_MODE=pr`)
+   - **Metadata: Read**
+   - **Pull requests: Read & write** (only for PR mode)
+   - Dependabot alerts: Read (optional)
+   - Nothing else.
+3. *Where can this be installed?* → Only on this account. Create it.
+4. On the App page:
+   - note the **App ID**;
+   - **Generate a private key** and keep the downloaded `.pem` out of git (e.g. `vulnwatch/secrets/app.pem`, or a secret manager).
+5. **Install App** → guvi-geek → *Only select repositories* → pick the repos to monitor.
+6. In `.env`, set `GITHUB_APP_ID=<id>` and `GITHUB_APP_PRIVATE_KEY_PATH=secrets/app.pem`. In Docker, pass the PEM text in `GITHUB_APP_PRIVATE_KEY` instead. Restart.
 
 ## What a run does
 

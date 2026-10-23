@@ -12,7 +12,7 @@ import ssl
 from email.message import EmailMessage
 
 from . import config, db
-from .config import DASHBOARD_URL, SEV_RANK
+from .config import SEV_RANK
 
 GROUP_SQL = """SELECT repo, ecosystem, package, IFNULL(version,'') version FROM issues
                WHERE ai_state='done' AND backlog=0 AND status IN ('open','in_progress') AND repo IN (SELECT name FROM repos WHERE tracked=1)
@@ -54,7 +54,7 @@ def compose(g, issues):
     ids = [a for i in issues for a in ([i["vuln_id"]] + db.jl(i["aliases"])) if a.startswith("CVE-")] or \
           [i["vuln_id"] for i in issues]
     ids = list(dict.fromkeys(ids))
-    link = f"{DASHBOARD_URL}/issues/{lead['id']}"
+    link = f"{config.DASHBOARD_URL}/issues/{lead['id']}"
     where = f"{g['repo']} › {lead['manifest'] or g['ecosystem']} › {g['package']} {g['version']}".strip()
     target = t.get("target_version") or ""
 
@@ -177,7 +177,7 @@ def escalate(f, reason, res=None):
     pcode = f"P{f['priority']}"
     subject = (f"[ESCALATION · {pcode}{' · EXPLOITED' if f['kev'] else ''}] {f['package']} in {f['repo']} "
                f"needs a manual fix" + (f": {f['version']} → {f['target']}" if f["target"] else ""))
-    link = f"{DASHBOARD_URL}/issues/{f['id']}"
+    link = f"{config.DASHBOARD_URL}/issues/{f['id']}"
     decl = next((e for e in f["evidence"] if e["kind"] in ("declared", "locked")), None)
     rows = [
         ("Help needed", reason),

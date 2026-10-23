@@ -21,7 +21,7 @@
 
   {% set nav = [("/", "Dashboard", "shield"), ("/issues", "All vulns", "list"), ("/repos", "Repos", "box"), ("/routing", "Routing", "mail"),
                 ("/mails", "Mails", "mail"), ("/feeds", "Feeds", "news"), ("/runs", "Runs", "clock"),
-                ("/check", "Check a repo", "search"), ("/docs", "Docs", "info")] %}
+                ("/check", "Check a repo", "search"), ("/docs", "Docs", "info"), ("/settings", "Settings", "sliders")] %}
   {% set path = request.url.path %}
   <header x-data="{ menu: false }" @keydown.escape.window="menu = false"
           class="sticky top-0 z-40 h-14 bg-slate-950 text-white ring-1 ring-white/10">

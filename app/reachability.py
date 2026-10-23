@@ -23,9 +23,9 @@ from pathlib import Path, PurePosixPath
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from . import db, findings, gh
+from . import config, db, findings, gh
 from .ai import SYSTEM, _usage_pattern, client
-from .config import CLONES, ORG, TRIAGE_MODELS
+from .config import CLONES, ORG
 
 GOVULNCHECK = shutil.which("govulncheck") or next(
     (str(p) for p in (Path.home() / ".local/bin/govulncheck", Path.home() / "go/bin/govulncheck") if p.exists()), "govulncheck")
@@ -146,10 +146,11 @@ def _symbols(f):
     prompt = (f"Library: {f['package']} ({f['ecosystem']})\nAdvisories:\n{vulns}\n"
               + (f"\nResearch notes:\n{res['notes'][:5000]}\n" if res else "")
               + "\nList the code-level names that reach the vulnerable code.")
-    for model in TRIAGE_MODELS:
+    for model in config.TRIAGE_MODELS:
         try:
-            r = client().models.generate_content(model=model, contents=prompt, config=types.GenerateContentConfig(
-                system_instruction=SYSTEM, response_mime_type="application/json", response_schema=Symbols))
+            from . import ai_usage
+            r = ai_usage.generate("symbols", model, prompt, types.GenerateContentConfig(
+                system_instruction=SYSTEM, response_mime_type="application/json", response_schema=Symbols), f["repo"], f["package"])
             if r.parsed:
                 return r.parsed
         except Exception:

@@ -1,8 +1,10 @@
 """Dashboard (FastAPI + Jinja + Alpine). Pages render a shell; lists come from the /api/* JSON routes."""
 import fnmatch
+import hmac
 import html
 import json
 import re
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 
-from . import ai, autofix, checker, classify, config, db, findings, gh, jobs, mailer, research
+from . import ai, ai_usage, autofix, checker, classify, config, db, findings, gh, github_auth, github_events, jobs, mailer, research, settings
 
 EMAIL_RE = re.compile(r"[^@\s,;]+@[^@\s,;]+\.[A-Za-z]{2,}")
 HERE = Path(__file__).parent
@@ -33,6 +35,7 @@ tpl.env.globals.update(cfg=config, jobs=jobs.state,
 @app.on_event("startup")
 def _start():
     db.init()
+    settings.apply_saved()      # dashboard settings over .env defaults, before anything runs
     jobs.start_scheduler()
 
 
@@ -150,7 +153,90 @@ def repos(request: Request):
         r["open"], r["p"] = len(p), [p.count(n) for n in range(4)]
         r["private"] = bool(r["private"])
         r.pop("tags", None)
-    return page(request, "repos.html", rows=rows)
+    return page(request, "repos.html", rows=rows, access=github_auth.status(),
+                installs=db.q("SELECT * FROM installations ORDER BY updated_at DESC"))
+
+
+# ---------- developer settings + AI usage ----------
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request):
+    return page(request, "settings.html", fields=settings.listing(), secrets=settings.secrets(),
+                access=github_auth.status(), db_file=config.DB_PATH.name)
+
+
+@app.get("/api/usage")
+def api_usage(days: int = 30):
+    return ai_usage.summary(max(1, min(days, 365)))
+
+
+@app.post("/api/settings")
+def api_settings_save(key: str = Form(...), value: str = Form(...)):
+    try:
+        settings.save(key, value)
+    except (KeyError, ValueError, TypeError) as e:
+        return JSONResponse({"error": f"{key}: {e}"}, 400)
+    return {"setting": next(f for f in settings.listing() if f["key"] == key)}
+
+
+@app.post("/api/settings/{key}/reset")
+def api_settings_reset(key: str):
+    if key not in settings.FIELDS:
+        return JSONResponse({"error": "unknown setting"}, 404)
+    settings.reset(key)
+    return {"setting": next(f for f in settings.listing() if f["key"] == key)}
+
+
+# ---------- GitHub App install flow ----------
+
+@app.get("/github/install")
+def github_install():
+    """Send the browser to GitHub's install / pick-repositories screen, with a one-time state value."""
+    if github_auth.mode() != "app":
+        return RedirectResponse("/repos?gh=not_configured", status_code=303)
+    state = secrets.token_urlsafe(24)
+    resp = RedirectResponse(github_auth.install_url(state), status_code=303)
+    resp.set_cookie("vw_gh_state", state, max_age=900, httponly=True, samesite="lax")
+    return resp
+
+
+@app.get("/github/setup")
+def github_setup(request: Request, installation_id: int = 0, setup_action: str = "", state: str = ""):
+    """GitHub sends the browser here after install or repo changes."""
+    if setup_action == "request":   # an org member asked; an owner still has to approve
+        return RedirectResponse("/repos?gh=requested", status_code=303)
+    # state only exists when the install started from our button; if present it must match our cookie
+    cookie = request.cookies.get("vw_gh_state", "")
+    if state and not (cookie and hmac.compare_digest(state, cookie)):
+        return RedirectResponse("/repos?gh=bad_state", status_code=303)
+    try:
+        inst = github_auth.fetch_installation(installation_id)   # proves it is this App's installation
+    except Exception:
+        return RedirectResponse("/repos?gh=unknown", status_code=303)
+    github_auth.save_installation(inst)
+    account = inst["account"]["login"]
+    ours = account.lower() == config.ORG.lower()
+    if ours:
+        jobs.run("repos")
+    resp = RedirectResponse(f"/repos?gh={'installed' if ours else 'other'}&account={account}", status_code=303)
+    resp.delete_cookie("vw_gh_state")
+    return resp
+
+
+@app.post("/github/webhook")
+async def github_webhook(request: Request):
+    body = await request.body()
+    if not config.GH_WEBHOOK_SECRET:
+        return JSONResponse({"error": "GITHUB_WEBHOOK_SECRET is not set"}, 503)
+    if not github_events.verify(body, request.headers.get("X-Hub-Signature-256", "")):
+        return JSONResponse({"error": "bad signature"}, 401)
+    event = request.headers.get("X-GitHub-Event", "")
+    summary, sync = github_events.handle(event, json.loads(body or b"{}"))
+    db.x("INSERT INTO runs(job, started, finished, log, ok) VALUES(?,?,?,?,1)",
+         f"webhook {event}", db.now(), db.now(), summary)
+    if sync:
+        jobs.run("repos")
+    return {"ok": True, "summary": summary}
 
 
 @app.post("/api/repos/track")

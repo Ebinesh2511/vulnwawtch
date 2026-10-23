@@ -16,8 +16,8 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from . import db, gh
-from .config import AI_MAX_PER_RUN, CLONES, GUIDE_MODELS, ORG, SEV_RANK, TRIAGE_MODELS
+from . import config, db, gh
+from .config import CLONES, ORG, SEV_RANK
 
 _client = None
 
@@ -170,8 +170,10 @@ def _vuln_block(issues, max_items=12):
 
 # ---------- Gemini ----------
 
-def _gen(models, prompt, schema=None, tries_per_model=2):
-    """Try each model in order; a block, empty reply or API error moves on to the next try/model."""
+def _gen(models, prompt, schema=None, tries_per_model=2, step="ai", repo=None, package=None):
+    """Try each model in order; a block, empty reply or API error moves on to the next try/model.
+    The daily token budget stops it at once (no retries)."""
+    from . import ai_usage
     cfg = types.GenerateContentConfig(system_instruction=SYSTEM)
     if schema:
         cfg.response_mime_type, cfg.response_schema = "application/json", schema
@@ -179,13 +181,15 @@ def _gen(models, prompt, schema=None, tries_per_model=2):
     for model in models:
         for attempt in range(tries_per_model):
             try:
-                r = client().models.generate_content(model=model, contents=prompt, config=cfg)
+                r = ai_usage.generate(step, model, prompt, cfg, repo, package)
                 if r.prompt_feedback and r.prompt_feedback.block_reason:
                     raise RuntimeError(f"blocked ({r.prompt_feedback.block_reason})")
                 out = r.parsed if schema else r.text
                 if not out:
                     raise RuntimeError("empty response")
                 return out
+            except ai_usage.BudgetExceeded:
+                raise
             except Exception as e:
                 errors.append(f"{model}: {str(e)[:120]}")
                 time.sleep(3 * (attempt + 1))
@@ -218,10 +222,10 @@ def analyze_group(repo, eco, name, version, log=print):
         if paths:
             facts += ("\n<call_graph tool=\"govulncheck\">\nThe Go call graph proves our code calls the vulnerable function:\n"
                       + "\n".join(paths[:6]) + "\n</call_graph>\n")
-    triage = _gen(TRIAGE_MODELS, facts + "\nAssess this finding.", Triage)
+    triage = _gen(config.TRIAGE_MODELS, facts + "\nAssess this finding.", Triage, step="triage", repo=repo, package=name)
     guide = None
     if triage.affected != "no":
-        guide = _gen(GUIDE_MODELS, facts + f"\nTriage so far: {triage.model_dump_json()}\n\n" + GUIDE_PROMPT)
+        guide = _gen(config.GUIDE_MODELS, facts + f"\nTriage so far: {triage.model_dump_json()}\n\n" + GUIDE_PROMPT, step="guide", repo=repo, package=name)
 
     for i in issues:
         db.x("""UPDATE issues SET triage=?, guide=?, ai_state='done', updated_at=?,
@@ -237,7 +241,9 @@ def analyze_group(repo, eco, name, version, log=print):
     log(f"  ai {repo}/{name}: affected={triage.affected} ({len(issues)} vuln(s))")
 
 
-def run(log=print, limit=AI_MAX_PER_RUN):
+def run(log=print, limit=None):
+    from . import ai_usage
+    limit = limit or config.AI_MAX_PER_RUN
     groups = db.q(f"""SELECT repo, ecosystem, package, IFNULL(version,'') version, max(kev) kev,
                      max(CASE severity WHEN 'CRITICAL' THEN 4 WHEN 'KEV' THEN 4 WHEN 'HIGH' THEN 3 ELSE 1 END) sev
                      FROM issues WHERE ai_state='pending' AND backlog=0 AND status IN ('open','in_progress') AND {db.TRACKED}
@@ -247,6 +253,11 @@ def run(log=print, limit=AI_MAX_PER_RUN):
         log("ai: nothing pending")
         return
     for g in groups:
+        try:
+            ai_usage.check_budget()
+        except ai_usage.BudgetExceeded as e:
+            log(f"ai: stopped: {e}")
+            break
         try:
             analyze_group(g["repo"], g["ecosystem"], g["package"], g["version"], log=log)
         except Exception as e:

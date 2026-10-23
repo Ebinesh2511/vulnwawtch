@@ -4,8 +4,8 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 
-from . import db
-from .config import FEED_DAYS, FEEDS_JSON
+from . import config, db
+from .config import FEEDS_JSON
 
 _spec = importlib.util.spec_from_file_location("vulnfeed", FEEDS_JSON.parent / "vulnfeed.py")
 vulnfeed = importlib.util.module_from_spec(_spec)
@@ -16,7 +16,7 @@ KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulner
 
 
 def refresh(log=print):
-    since = datetime.now(timezone.utc) - timedelta(days=FEED_DAYS)
+    since = datetime.now(timezone.utc) - timedelta(days=config.FEED_DAYS)
     sources = json.loads(FEEDS_JSON.read_text())["sources"]
     items = vulnfeed.collect(sources, since)
     with db.conn() as c:
@@ -31,7 +31,7 @@ def refresh(log=print):
                        it["summary"], json.dumps(ids), json.dumps(it["sources"]), int(it["kev"]),
                        it["severity"], db.now()))
     refresh_kev()
-    log(f"feeds: {len(items)} items in last {FEED_DAYS}d")
+    log(f"feeds: {len(items)} items in last {config.FEED_DAYS}d")
     return len(items)
 
 

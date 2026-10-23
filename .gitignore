@@ -2,3 +2,5 @@
 data/
 __pycache__/
 tools/node_modules/
+secrets/
+*.pem

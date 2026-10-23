@@ -4,7 +4,7 @@ import re
 from collections import defaultdict
 from pathlib import PurePosixPath
 
-from . import db, gh, manifests
+from . import db, gh, github_auth, manifests
 from .config import ORG
 
 
@@ -23,6 +23,11 @@ def sync_repos(log=print):
                   private=excluded.private, language=excluded.language, pushed_at=excluded.pushed_at""",
              name, default, (cur or {}).get("tracked_branch") or default, int(r["visibility"] != "PUBLIC"),
              (r.get("primaryLanguage") or {}).get("name"), r.get("pushedAt"), 0 if r.get("isEmpty") else 1)
+    if github_auth.mode() == "app" and seen:
+        # repos no longer shared with the App (a missed webhook, or the App was narrowed): stop tracking
+        for r in db.q("SELECT name FROM repos WHERE tracked=1"):
+            if r["name"] not in seen:
+                db.x("UPDATE repos SET tracked=0, scan_error='Not shared with the GitHub App' WHERE name=?", r["name"])
     log(f"repos: {len(seen)} active in {ORG}")
     return seen
 
